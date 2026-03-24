@@ -14,7 +14,22 @@ final class PermissionCoordinator {
         }
     )
 
+    private let notificationCenter: NotificationCenter
     private var shouldOfferSettingsShortcut = false
+
+    init(notificationCenter: NotificationCenter = .default) {
+        self.notificationCenter = notificationCenter
+        notificationCenter.addObserver(
+            self,
+            selector: #selector(handleApplicationDidBecomeActive(_:)),
+            name: NSApplication.didBecomeActiveNotification,
+            object: nil
+        )
+    }
+
+    deinit {
+        notificationCenter.removeObserver(self)
+    }
 
     func ensureScreenRecordingPermission() -> Bool {
         guard !CGPreflightScreenCaptureAccess() else {
@@ -63,5 +78,15 @@ final class PermissionCoordinator {
 
         permissionWindowController.closeWindow()
         NSWorkspace.shared.open(settingsURL)
+    }
+
+    @objc
+    private func handleApplicationDidBecomeActive(_ notification: Notification) {
+        guard CGPreflightScreenCaptureAccess() else {
+            return
+        }
+
+        shouldOfferSettingsShortcut = false
+        permissionWindowController.closeWindow()
     }
 }
