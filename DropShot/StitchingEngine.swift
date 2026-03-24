@@ -10,17 +10,20 @@ final class StitchingEngine {
         var minimumVerticalOffset: CGFloat
         var minimumVerticalDominanceRatio: CGFloat
         var minimumOverlapRatio: CGFloat
+        var maximumCompositePixelCount: Int
 
         init(
             minimumConfidence: Float = 0.2,
             minimumVerticalOffset: CGFloat = 12,
             minimumVerticalDominanceRatio: CGFloat = 1.75,
-            minimumOverlapRatio: CGFloat = 0.2
+            minimumOverlapRatio: CGFloat = 0.2,
+            maximumCompositePixelCount: Int = 32_000_000
         ) {
             self.minimumConfidence = minimumConfidence
             self.minimumVerticalOffset = minimumVerticalOffset
             self.minimumVerticalDominanceRatio = minimumVerticalDominanceRatio
             self.minimumOverlapRatio = minimumOverlapRatio
+            self.maximumCompositePixelCount = maximumCompositePixelCount
         }
     }
 
@@ -53,6 +56,7 @@ final class StitchingEngine {
     enum StripDisposition {
         case seed
         case appended
+        case trimmed
         case rejected
     }
 
@@ -65,6 +69,7 @@ final class StitchingEngine {
         case insufficientVerticalDominance
         case insufficientOverlap
         case reverseVerticalMovement
+        case excessiveReverseMovement
     }
 
     struct ProcessedStrip {
@@ -94,6 +99,7 @@ final class StitchingEngine {
 
     enum StitchingError: LocalizedError {
         case noStrips
+        case compositeTooLarge(width: Int, height: Int, maximumPixels: Int)
         case rasterizationFailed(width: Int, height: Int)
         case compositeImageCreationFailed(width: Int, height: Int)
 
@@ -101,6 +107,9 @@ final class StitchingEngine {
             switch self {
             case .noStrips:
                 return "The stitching engine cannot build a composite without any strips."
+            case .compositeTooLarge(let width, let height, let maximumPixels):
+                let pixelCount = Int64(width) * Int64(height)
+                return "The stitched image would be \(width)x\(height) (\(pixelCount) pixels), exceeding the \(maximumPixels)-pixel safety limit."
             case .rasterizationFailed(let width, let height):
                 return "The stitching engine could not rasterize a \(width)x\(height) strip."
             case .compositeImageCreationFailed(let width, let height):
@@ -186,13 +195,21 @@ final class StitchingEngine {
 
     private struct AppendPlan {
         let appendedHeight: Int
-        let overlapWidth: Int
-        let overlapHeight: Int
         let sourceStartRow: Int
     }
 
-    private enum AppendDecision {
+    private struct TrimPlan {
+        let trimmedHeight: Int
+    }
+
+    private struct MovementGeometry {
+        let horizontalOffset: Int
+        let verticalOffset: Int
+    }
+
+    private enum CompositeChangeDecision {
         case append(AppendPlan)
+        case trim(TrimPlan)
         case deferMovement(diagnostic: String)
         case reject(reason: RejectionReason, diagnostic: String)
     }
@@ -258,7 +275,7 @@ final class StitchingEngine {
     @discardableResult
     func addStrip(_ strip: Strip) throws -> ProcessedStrip {
         guard let previousStrip = lastStrip else {
-            let processed = seed(strip)
+            let processed = try seed(strip)
             processedStrips.append(processed)
             return processed
         }
@@ -276,6 +293,7 @@ final class StitchingEngine {
             throw StitchingError.noStrips
         }
 
+        try validateCompositeSize(width: compositeWidth, height: compositeHeight)
         let image = try renderCompositeImage()
         let acceptedStripCount = processedStrips.reduce(into: 0) { count, processed in
             if processed.disposition != .rejected {
@@ -303,7 +321,8 @@ final class StitchingEngine {
         return try engine.buildComposite()
     }
 
-    private func seed(_ strip: Strip) -> ProcessedStrip {
+    private func seed(_ strip: Strip) throws -> ProcessedStrip {
+        try validateCompositeSize(width: strip.image.width, height: strip.image.height)
         compositeWidth = strip.image.width
         compositeHeight = strip.image.height
         compositeSegments = [
@@ -337,7 +356,7 @@ final class StitchingEngine {
 
         switch connection {
         case .connected(let alignment, let diagnostic):
-            let decision = decideCompositeAppend(
+            let decision = decideCompositeChange(
                 for: alignment,
                 imageWidth: strip.image.width,
                 imageHeight: strip.image.height
@@ -345,6 +364,10 @@ final class StitchingEngine {
 
             switch decision {
             case .append(let plan):
+                try validateCompositeSize(
+                    width: compositeWidth,
+                    height: compositeHeight + plan.appendedHeight
+                )
                 compositeSegments.append(
                     CompositeSegment(
                         image: strip.image,
@@ -364,6 +387,24 @@ final class StitchingEngine {
                     compositeHeight: compositeHeight,
                     rejectionReason: nil,
                     diagnostic: diagnostic
+                )
+
+            case .trim(let plan):
+                trimComposite(by: plan.trimmedHeight)
+                compositeAnchorStrip = strip
+                lastStripAlignmentToAnchor = .identity
+
+                return ProcessedStrip(
+                    strip: strip,
+                    disposition: .trimmed,
+                    translation: adjacentAssessment.translation,
+                    appendedHeight: 0,
+                    compositeHeight: compositeHeight,
+                    rejectionReason: nil,
+                    diagnostic: joinedDiagnostics(
+                        diagnostic,
+                        "Trimmed \(plan.trimmedHeight)px from the composite tail after reverse movement."
+                    )
                 )
 
             case .deferMovement(let movementDiagnostic):
@@ -482,11 +523,11 @@ final class StitchingEngine {
         )
     }
 
-    private func decideCompositeAppend(
+    private func decideCompositeChange(
         for alignment: CompositeAlignment,
         imageWidth: Int,
         imageHeight: Int
-    ) -> AppendDecision {
+    ) -> CompositeChangeDecision {
         guard alignment.absoluteVerticalOffset >=
                 alignment.absoluteHorizontalOffset * configuration.minimumVerticalDominanceRatio else {
             return .reject(
@@ -495,17 +536,42 @@ final class StitchingEngine {
             )
         }
 
-        switch makeAppendPlan(for: alignment, imageWidth: imageWidth, imageHeight: imageHeight) {
-        case .success(let plan):
-            guard CGFloat(plan.appendedHeight) >= configuration.minimumVerticalOffset else {
-                return .deferMovement(
-                    diagnostic: "Accumulated forward movement \(plan.appendedHeight)px was below \(configuration.minimumVerticalOffset)px."
-                )
+        let quantizedAlignment = QuantizedAlignment(alignment)
+        if quantizedAlignment.verticalOffset == 0 {
+            return .deferMovement(
+                diagnostic: "The accumulated movement rounded to zero new rows."
+            )
+        }
+
+        if quantizedAlignment.verticalOffset > 0 {
+            switch makeAppendPlan(for: alignment, imageWidth: imageWidth, imageHeight: imageHeight) {
+            case .success(let plan):
+                guard CGFloat(plan.appendedHeight) >= configuration.minimumVerticalOffset else {
+                    return .deferMovement(
+                        diagnostic: "Accumulated forward movement \(plan.appendedHeight)px was below \(configuration.minimumVerticalOffset)px."
+                    )
+                }
+                return .append(plan)
+
+            case .failure(let failure):
+                if failure.reason == .insufficientVerticalMovement {
+                    return .deferMovement(diagnostic: failure.diagnostic)
+                }
+                return .reject(reason: failure.reason, diagnostic: failure.diagnostic)
             }
-            return .append(plan)
+        }
+
+        switch makeTrimPlan(
+            for: alignment,
+            imageWidth: imageWidth,
+            imageHeight: imageHeight,
+            compositeHeight: compositeHeight
+        ) {
+        case .success(let plan):
+            return .trim(plan)
 
         case .failure(let failure):
-            if failure.reason == RejectionReason.insufficientVerticalMovement {
+            if failure.reason == .insufficientVerticalMovement {
                 return .deferMovement(diagnostic: failure.diagnostic)
             }
             return .reject(reason: failure.reason, diagnostic: failure.diagnostic)
@@ -557,7 +623,7 @@ final class StitchingEngine {
             )
         }
 
-        switch makeAppendPlan(
+        switch movementGeometry(
             for: CompositeAlignment(translation),
             imageWidth: imageWidth,
             imageHeight: imageHeight
@@ -579,6 +645,69 @@ final class StitchingEngine {
         imageWidth: Int,
         imageHeight: Int
     ) -> Result<AppendPlan, Failure> {
+        switch movementGeometry(for: alignment, imageWidth: imageWidth, imageHeight: imageHeight) {
+        case .success(let geometry):
+            guard geometry.verticalOffset > 0 else {
+                return .failure(
+                    Failure(
+                        reason: .reverseVerticalMovement,
+                        diagnostic: "Vision alignment indicates the current strip would prepend rows above the existing composite."
+                    )
+                )
+            }
+
+            return .success(
+                AppendPlan(
+                    appendedHeight: geometry.verticalOffset,
+                    sourceStartRow: imageHeight - geometry.verticalOffset
+                )
+            )
+
+        case .failure(let failure):
+            return .failure(failure)
+        }
+    }
+
+    private func makeTrimPlan(
+        for alignment: CompositeAlignment,
+        imageWidth: Int,
+        imageHeight: Int,
+        compositeHeight: Int
+    ) -> Result<TrimPlan, Failure> {
+        switch movementGeometry(for: alignment, imageWidth: imageWidth, imageHeight: imageHeight) {
+        case .success(let geometry):
+            guard geometry.verticalOffset < 0 else {
+                return .failure(
+                    Failure(
+                        reason: .insufficientVerticalMovement,
+                        diagnostic: "The registered movement did not move the composite backward."
+                    )
+                )
+            }
+
+            let trimmedHeight = -geometry.verticalOffset
+            let remainingHeight = compositeHeight - trimmedHeight
+            guard remainingHeight > 0 else {
+                return .failure(
+                    Failure(
+                        reason: .excessiveReverseMovement,
+                        diagnostic: "Reverse movement of \(trimmedHeight)px would remove the entire composite."
+                    )
+                )
+            }
+
+            return .success(TrimPlan(trimmedHeight: trimmedHeight))
+
+        case .failure(let failure):
+            return .failure(failure)
+        }
+    }
+
+    private func movementGeometry(
+        for alignment: CompositeAlignment,
+        imageWidth: Int,
+        imageHeight: Int
+    ) -> Result<MovementGeometry, Failure> {
         let quantizedAlignment = QuantizedAlignment(alignment)
         let verticalOffset = quantizedAlignment.verticalOffset
         let horizontalOffset = quantizedAlignment.horizontalOffset
@@ -592,17 +721,7 @@ final class StitchingEngine {
             )
         }
 
-        guard verticalOffset > 0 else {
-            return .failure(
-                Failure(
-                    reason: .reverseVerticalMovement,
-                    diagnostic: "Vision alignment indicates the current strip would prepend rows above the existing composite."
-                )
-            )
-        }
-
-        let appendedHeight = verticalOffset
-        let overlapHeight = imageHeight - appendedHeight
+        let overlapHeight = imageHeight - abs(verticalOffset)
         let overlapWidth = imageWidth - abs(horizontalOffset)
         let minimumOverlapHeight = minimumOverlapLength(for: imageHeight)
         let minimumOverlapWidth = minimumOverlapLength(for: imageWidth)
@@ -617,17 +736,49 @@ final class StitchingEngine {
         }
 
         return .success(
-            AppendPlan(
-                appendedHeight: appendedHeight,
-                overlapWidth: overlapWidth,
-                overlapHeight: overlapHeight,
-                sourceStartRow: imageHeight - appendedHeight
+            MovementGeometry(
+                horizontalOffset: horizontalOffset,
+                verticalOffset: verticalOffset
             )
         )
     }
 
     private func minimumOverlapLength(for dimension: Int) -> Int {
         max(1, Int((CGFloat(dimension) * configuration.minimumOverlapRatio).rounded(.up)))
+    }
+
+    private func trimComposite(by trimmedHeight: Int) {
+        guard trimmedHeight > 0 else {
+            return
+        }
+
+        var remainingTrim = trimmedHeight
+        while remainingTrim > 0, let trailingSegment = compositeSegments.last {
+            if trailingSegment.height <= remainingTrim {
+                compositeSegments.removeLast()
+                remainingTrim -= trailingSegment.height
+            } else {
+                compositeSegments[compositeSegments.count - 1] = CompositeSegment(
+                    image: trailingSegment.image,
+                    sourceStartRow: trailingSegment.sourceStartRow,
+                    height: trailingSegment.height - remainingTrim
+                )
+                remainingTrim = 0
+            }
+        }
+
+        compositeHeight -= trimmedHeight
+    }
+
+    private func validateCompositeSize(width: Int, height: Int) throws {
+        let pixelCount = Int64(width) * Int64(height)
+        guard pixelCount <= Int64(configuration.maximumCompositePixelCount) else {
+            throw StitchingError.compositeTooLarge(
+                width: width,
+                height: height,
+                maximumPixels: configuration.maximumCompositePixelCount
+            )
+        }
     }
 
     private func renderCompositeImage() throws -> CGImage {

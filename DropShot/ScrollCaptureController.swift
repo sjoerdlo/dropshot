@@ -25,7 +25,7 @@ final class ScrollCaptureController {
 
     struct CompletedSession {
         let region: Region
-        let strips: [Strip]
+        let composite: StitchingEngine.Composite
         let startedAt: Date
         let endedAt: Date
     }
@@ -64,10 +64,10 @@ final class ScrollCaptureController {
     private final class ActiveSession {
         let region: Region
         let startedAt = Date()
+        let stitchingEngine: StitchingEngine
 
         var phase: Phase = .starting
         var captureContext: DisplayCaptureContext?
-        var strips: [Strip] = []
         var nextStripIndex = 0
         var lastCapturedAt: Date?
         var isCaptureInFlight = false
@@ -82,20 +82,26 @@ final class ScrollCaptureController {
         var finishCompletion: ((Result<CompletedSession, Error>) -> Void)?
         var cancelCompletion: ((Result<Void, Error>) -> Void)?
 
-        init(region: Region) {
+        init(region: Region, stitchingEngine: StitchingEngine) {
             self.region = region
+            self.stitchingEngine = stitchingEngine
         }
     }
 
     private let screenCaptureManager: ScreenCaptureManaging
+    private let stitchingEngineFactory: () -> StitchingEngine
     private let captureSettleDelay: TimeInterval = 0.12
     private let captureThrottleInterval: TimeInterval = 0.22
     private let escapeHotKeyMonitor = EscapeHotKeyMonitor()
 
     private var activeSession: ActiveSession?
 
-    init(screenCaptureManager: ScreenCaptureManaging = ScreenCaptureManager()) {
+    init(
+        screenCaptureManager: ScreenCaptureManaging = ScreenCaptureManager(),
+        stitchingEngineFactory: @escaping () -> StitchingEngine = { StitchingEngine() }
+    ) {
         self.screenCaptureManager = screenCaptureManager
+        self.stitchingEngineFactory = stitchingEngineFactory
     }
 
     deinit {
@@ -144,7 +150,10 @@ final class ScrollCaptureController {
             return
         }
 
-        let session = ActiveSession(region: Region(selectedRegion: selectedRegion))
+        let session = ActiveSession(
+            region: Region(selectedRegion: selectedRegion),
+            stitchingEngine: stitchingEngineFactory()
+        )
         session.startCompletion = completion
         activeSession = session
 
@@ -335,7 +344,20 @@ final class ScrollCaptureController {
             )
             session.nextStripIndex += 1
             session.lastCapturedAt = capturedAt
-            session.strips.append(strip)
+
+            do {
+                try session.stitchingEngine.addStrip(
+                    StitchingEngine.Strip(
+                        index: strip.index,
+                        image: image,
+                        capturedAt: capturedAt
+                    )
+                )
+            } catch {
+                failSession(session, with: error)
+                return
+            }
+
             onStripCaptured?(strip)
             advanceSessionAfterSuccessfulCapture(session)
         case .failure(let error):
@@ -472,8 +494,16 @@ final class ScrollCaptureController {
         let completion = session.finishCompletion
         session.finishCompletion = nil
 
-        guard !session.strips.isEmpty else {
+        guard session.nextStripIndex > 0 else {
             completion?(.failure(ScrollCaptureError.noCapturedStrips))
+            return
+        }
+
+        let composite: StitchingEngine.Composite
+        do {
+            composite = try session.stitchingEngine.buildComposite()
+        } catch {
+            completion?(.failure(error))
             return
         }
 
@@ -481,7 +511,7 @@ final class ScrollCaptureController {
             .success(
                 CompletedSession(
                     region: session.region,
-                    strips: session.strips,
+                    composite: composite,
                     startedAt: session.startedAt,
                     endedAt: Date()
                 )

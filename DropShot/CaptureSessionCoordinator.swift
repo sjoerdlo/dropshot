@@ -374,8 +374,9 @@ final class CaptureSessionCoordinator {
             if let onScrollCaptureSessionCompleted {
                 onScrollCaptureSessionCompleted(completedSession)
             } else {
+                let compositeSize = completedSession.composite.metadata.compositePixelSize
                 NSLog(
-                    "Collected \(completedSession.strips.count) strips for capture rect \(NSStringFromRect(selectedRegion.rect)) on display \(selectedRegion.stillImage.displayID)."
+                    "Stitched \(completedSession.composite.metadata.sourceStripCount) strips into a \(Int(compositeSize.width))x\(Int(compositeSize.height)) composite for capture rect \(NSStringFromRect(selectedRegion.rect)) on display \(selectedRegion.stillImage.displayID)."
                 )
             }
 
