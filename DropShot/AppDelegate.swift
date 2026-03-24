@@ -4,7 +4,10 @@ import Carbon.HIToolbox
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
     private let statusMenu = NSMenu()
-    private let captureSessionCoordinator = CaptureSessionCoordinator()
+    private let permissionCoordinator = PermissionCoordinator()
+    private lazy var captureSessionCoordinator = CaptureSessionCoordinator(
+        permissionCoordinator: permissionCoordinator
+    )
     private lazy var hotkeyManager = HotkeyManager { [weak self] in
         self?.startCaptureSession()
     }
@@ -59,13 +62,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc
     private func quitApplication(_ sender: Any?) {
         NSApp.terminate(sender)
-    }
-}
-
-final class CaptureSessionCoordinator {
-    func beginCaptureSession() {
-        // Later milestones replace this stub with the real capture flow.
-        NSLog("Capture session requested.")
     }
 }
 
