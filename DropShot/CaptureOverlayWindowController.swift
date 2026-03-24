@@ -7,6 +7,7 @@ final class CaptureOverlayWindowController: NSWindowController, NSWindowDelegate
     private(set) var selectedRect: CGRect?
 
     private let screen: NSScreen
+    private let captureImageView = NSImageView()
     private let selectionOverlayView = SelectionOverlayView(frame: .zero)
 
     init(screen: NSScreen, image: CGImage) {
@@ -23,6 +24,7 @@ final class CaptureOverlayWindowController: NSWindowController, NSWindowDelegate
         window.hasShadow = false
         window.backgroundColor = .black
         window.isOpaque = true
+        window.hidesOnDeactivate = false
         window.level = .screenSaver
         window.collectionBehavior = [.fullScreenAuxiliary, .stationary]
         window.animationBehavior = .none
@@ -57,27 +59,37 @@ final class CaptureOverlayWindowController: NSWindowController, NSWindowDelegate
         close()
     }
 
+    func enterPassthroughMode() {
+        guard let window else {
+            return
+        }
+
+        captureImageView.isHidden = true
+        window.backgroundColor = .clear
+        window.isOpaque = false
+        window.ignoresMouseEvents = true
+    }
+
     func windowWillClose(_ notification: Notification) {
         onClose?()
     }
 
     private func makeContentView(for screen: NSScreen, image: CGImage) -> NSView {
-        let imageView = NSImageView()
-        imageView.translatesAutoresizingMaskIntoConstraints = false
-        imageView.image = NSImage(cgImage: image, size: screen.frame.size)
-        imageView.imageScaling = .scaleAxesIndependently
+        captureImageView.translatesAutoresizingMaskIntoConstraints = false
+        captureImageView.image = NSImage(cgImage: image, size: screen.frame.size)
+        captureImageView.imageScaling = .scaleAxesIndependently
 
         selectionOverlayView.translatesAutoresizingMaskIntoConstraints = false
 
         let contentView = NSView(frame: CGRect(origin: .zero, size: screen.frame.size))
-        contentView.addSubview(imageView)
+        contentView.addSubview(captureImageView)
         contentView.addSubview(selectionOverlayView)
 
         NSLayoutConstraint.activate([
-            imageView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
-            imageView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
-            imageView.topAnchor.constraint(equalTo: contentView.topAnchor),
-            imageView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
+            captureImageView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
+            captureImageView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
+            captureImageView.topAnchor.constraint(equalTo: contentView.topAnchor),
+            captureImageView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
             selectionOverlayView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
             selectionOverlayView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
             selectionOverlayView.topAnchor.constraint(equalTo: contentView.topAnchor),

@@ -18,10 +18,30 @@ final class CaptureSessionCoordinator {
         let id: UInt64
     }
 
-    private struct PresentationSession {
+    private final class PresentationSession {
         let request: CaptureRequest
         let stillImage: StillImage
         let overlayWindowController: CaptureOverlayWindowController
+        let controlPanelController: ScrollControlPanelController
+
+        var selectedRegion: SelectedRegion?
+
+        init(
+            request: CaptureRequest,
+            stillImage: StillImage,
+            overlayWindowController: CaptureOverlayWindowController,
+            controlPanelController: ScrollControlPanelController
+        ) {
+            self.request = request
+            self.stillImage = stillImage
+            self.overlayWindowController = overlayWindowController
+            self.controlPanelController = controlPanelController
+        }
+
+        func dismissWindows() {
+            controlPanelController.dismiss()
+            overlayWindowController.dismissOverlay()
+        }
     }
 
     private enum SessionState {
@@ -39,6 +59,8 @@ final class CaptureSessionCoordinator {
 
     var onStillImageReady: ((StillImage) -> Void)?
     var onSelectedRegion: ((SelectedRegion) -> Void)?
+    var onSessionCancelled: (() -> Void)?
+    var onSessionConfirmed: ((SelectedRegion) -> Void)?
     private(set) var selectedRegion: SelectedRegion?
 
     init(
@@ -51,13 +73,13 @@ final class CaptureSessionCoordinator {
 
     func beginCaptureSession() {
         let request = makeNextCaptureRequest()
-        let existingOverlayWindowController = presentedOverlayWindowController
+        let existingPresentationSession = currentPresentationSession
 
         // Move to the new request before dismissing any older overlay so a close callback
         // from the previous window cannot clear the newer in-flight session.
         selectedRegion = nil
         sessionState = .capturing(request)
-        existingOverlayWindowController?.dismissOverlay()
+        existingPresentationSession?.dismissWindows()
 
         captureStillImageForActiveScreen { [weak self] result in
             guard let self else {
@@ -69,13 +91,13 @@ final class CaptureSessionCoordinator {
     }
 
     func dismissCaptureOverlay() {
-        guard let overlayWindowController = presentedOverlayWindowController else {
+        guard let presentationSession = currentPresentationSession else {
             return
         }
 
         selectedRegion = nil
         sessionState = .idle
-        overlayWindowController.dismissOverlay()
+        presentationSession.dismissWindows()
     }
 
     func captureStillImageForActiveScreen(completion: @escaping StillImageCompletion) {
@@ -112,12 +134,12 @@ final class CaptureSessionCoordinator {
         }
     }
 
-    private var presentedOverlayWindowController: CaptureOverlayWindowController? {
+    private var currentPresentationSession: PresentationSession? {
         guard case .presenting(let presentationSession) = sessionState else {
             return nil
         }
 
-        return presentationSession.overlayWindowController
+        return presentationSession
     }
 
     private func makeNextCaptureRequest() -> CaptureRequest {
@@ -151,43 +173,54 @@ final class CaptureSessionCoordinator {
             screen: stillImage.screen,
             image: stillImage.image
         )
-        overlayWindowController.onSelectionFinalized = { [weak self, weak overlayWindowController] selectedRect in
-            guard let self, let overlayWindowController else {
-                return
-            }
-
-            self.handleOverlaySelection(
-                selectedRect,
-                for: request,
-                overlayWindowController: overlayWindowController
-            )
-        }
-        overlayWindowController.onClose = { [weak self, weak overlayWindowController] in
-            guard let self, let overlayWindowController else {
-                return
-            }
-
-            self.handleOverlayClose(for: request, overlayWindowController: overlayWindowController)
-        }
-
+        let controlPanelController = ScrollControlPanelController()
         let presentationSession = PresentationSession(
             request: request,
             stillImage: stillImage,
-            overlayWindowController: overlayWindowController
+            overlayWindowController: overlayWindowController,
+            controlPanelController: controlPanelController
         )
+
+        overlayWindowController.onSelectionFinalized = { [weak self, weak presentationSession] selectedRect in
+            guard let self, let presentationSession else {
+                return
+            }
+
+            self.handleOverlaySelection(selectedRect, for: presentationSession)
+        }
+        overlayWindowController.onClose = { [weak self, weak presentationSession] in
+            guard let self, let presentationSession else {
+                return
+            }
+
+            self.handleOverlayClose(for: presentationSession)
+        }
+        controlPanelController.onDone = { [weak self, weak presentationSession] in
+            guard let self, let presentationSession else {
+                return
+            }
+
+            self.handleControlPanelDone(for: presentationSession)
+        }
+        controlPanelController.onCancel = { [weak self, weak presentationSession] in
+            guard let self, let presentationSession else {
+                return
+            }
+
+            self.handleControlPanelCancel(for: presentationSession)
+        }
+
         sessionState = .presenting(presentationSession)
         overlayWindowController.present()
     }
 
     private func handleOverlaySelection(
         _ selectedRect: CGRect,
-        for request: CaptureRequest,
-        overlayWindowController: CaptureOverlayWindowController
+        for presentationSession: PresentationSession
     ) {
         guard
-            case .presenting(let presentationSession) = sessionState,
-            presentationSession.request == request,
-            presentationSession.overlayWindowController === overlayWindowController
+            case .presenting(let activePresentationSession) = sessionState,
+            activePresentationSession === presentationSession
         else {
             return
         }
@@ -196,7 +229,13 @@ final class CaptureSessionCoordinator {
             stillImage: presentationSession.stillImage,
             rect: selectedRect
         )
+        presentationSession.selectedRegion = selectedRegion
         self.selectedRegion = selectedRegion
+        presentationSession.overlayWindowController.enterPassthroughMode()
+        presentationSession.controlPanelController.present(
+            anchoredTo: selectedRect,
+            on: presentationSession.stillImage.screen
+        )
 
         if let onSelectedRegion {
             onSelectedRegion(selectedRegion)
@@ -207,20 +246,61 @@ final class CaptureSessionCoordinator {
         }
     }
 
-    private func handleOverlayClose(
-        for request: CaptureRequest,
-        overlayWindowController: CaptureOverlayWindowController
-    ) {
+    private func handleOverlayClose(for presentationSession: PresentationSession) {
         guard
-            case .presenting(let presentationSession) = sessionState,
-            presentationSession.request == request,
-            presentationSession.overlayWindowController === overlayWindowController
+            case .presenting(let activePresentationSession) = sessionState,
+            activePresentationSession === presentationSession
         else {
             return
         }
 
+        presentationSession.controlPanelController.dismiss()
+        presentationSession.selectedRegion = nil
         selectedRegion = nil
         sessionState = .idle
+    }
+
+    private func handleControlPanelCancel(for presentationSession: PresentationSession) {
+        guard
+            case .presenting(let activePresentationSession) = sessionState,
+            activePresentationSession === presentationSession
+        else {
+            return
+        }
+
+        presentationSession.selectedRegion = nil
+        selectedRegion = nil
+        sessionState = .idle
+        presentationSession.dismissWindows()
+
+        if let onSessionCancelled {
+            onSessionCancelled()
+        } else {
+            NSLog("Cancelled capture session for display \(presentationSession.stillImage.displayID).")
+        }
+    }
+
+    private func handleControlPanelDone(for presentationSession: PresentationSession) {
+        guard
+            case .presenting(let activePresentationSession) = sessionState,
+            activePresentationSession === presentationSession,
+            let selectedRegion = presentationSession.selectedRegion
+        else {
+            return
+        }
+
+        self.selectedRegion = nil
+        presentationSession.selectedRegion = nil
+        sessionState = .idle
+        presentationSession.dismissWindows()
+
+        if let onSessionConfirmed {
+            onSessionConfirmed(selectedRegion)
+        } else {
+            NSLog(
+                "Done requested for capture rect \(NSStringFromRect(selectedRegion.rect)) on display \(selectedRegion.stillImage.displayID)."
+            )
+        }
     }
 
     private func logDiscardedCaptureResult(
