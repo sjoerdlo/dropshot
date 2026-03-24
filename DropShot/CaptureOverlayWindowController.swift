@@ -3,8 +3,11 @@ import CoreGraphics
 
 final class CaptureOverlayWindowController: NSWindowController, NSWindowDelegate {
     var onClose: (() -> Void)?
+    var onSelectionFinalized: ((CGRect) -> Void)?
+    private(set) var selectedRect: CGRect?
 
     private let screen: NSScreen
+    private let selectionOverlayView = SelectionOverlayView(frame: .zero)
 
     init(screen: NSScreen, image: CGImage) {
         self.screen = screen
@@ -26,8 +29,11 @@ final class CaptureOverlayWindowController: NSWindowController, NSWindowDelegate
 
         super.init(window: window)
 
+        selectionOverlayView.onSelectionCompleted = { [weak self] selectionRect in
+            self?.handleSelectionCompleted(selectionRect)
+        }
         window.delegate = self
-        window.contentView = Self.makeContentView(for: screen, image: image)
+        window.contentView = makeContentView(for: screen, image: image)
     }
 
     @available(*, unavailable)
@@ -47,6 +53,7 @@ final class CaptureOverlayWindowController: NSWindowController, NSWindowDelegate
     }
 
     func dismissOverlay() {
+        selectedRect = nil
         close()
     }
 
@@ -54,23 +61,41 @@ final class CaptureOverlayWindowController: NSWindowController, NSWindowDelegate
         onClose?()
     }
 
-    private static func makeContentView(for screen: NSScreen, image: CGImage) -> NSView {
+    private func makeContentView(for screen: NSScreen, image: CGImage) -> NSView {
         let imageView = NSImageView()
         imageView.translatesAutoresizingMaskIntoConstraints = false
         imageView.image = NSImage(cgImage: image, size: screen.frame.size)
         imageView.imageScaling = .scaleAxesIndependently
 
-        let contentView = NSView(frame: screen.frame)
+        selectionOverlayView.translatesAutoresizingMaskIntoConstraints = false
+
+        let contentView = NSView(frame: CGRect(origin: .zero, size: screen.frame.size))
         contentView.addSubview(imageView)
+        contentView.addSubview(selectionOverlayView)
 
         NSLayoutConstraint.activate([
             imageView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
             imageView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
             imageView.topAnchor.constraint(equalTo: contentView.topAnchor),
-            imageView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor)
+            imageView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
+            selectionOverlayView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
+            selectionOverlayView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
+            selectionOverlayView.topAnchor.constraint(equalTo: contentView.topAnchor),
+            selectionOverlayView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor)
         ])
 
         return contentView
+    }
+
+    private func handleSelectionCompleted(_ selectionRect: CGRect) {
+        guard let window else {
+            return
+        }
+
+        let selectionRectInWindow = selectionOverlayView.convert(selectionRect, to: nil)
+        let selectionRectOnScreen = window.convertToScreen(selectionRectInWindow).standardized.integral
+        selectedRect = selectionRectOnScreen
+        onSelectionFinalized?(selectionRectOnScreen)
     }
 }
 
