@@ -234,7 +234,9 @@ final class CaptureSessionCoordinator {
                     return
                 }
 
-                _ = self.permissionCoordinator.ensureScreenRecordingPermission()
+                DispatchQueue.main.async {
+                    _ = self.permissionCoordinator.ensureScreenRecordingPermission()
+                }
                 self.complete(completion, with: .failure(ScreenCaptureError.permissionRequired))
             }
         }
