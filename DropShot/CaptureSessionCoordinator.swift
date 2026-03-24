@@ -17,10 +17,22 @@ final class CaptureSessionCoordinator {
         let image: CGImage
     }
 
+    private struct CaptureRequest: Equatable {
+        let id: UInt64
+    }
+
+    private enum SessionState {
+        case idle
+        case capturing(CaptureRequest)
+        case presenting(CaptureRequest, CaptureOverlayWindowController)
+    }
+
     typealias StillImageCompletion = (Result<StillImage, Error>) -> Void
 
     private let permissionCoordinator: PermissionCoordinator
     private let screenCaptureManager: ScreenCaptureManaging
+    private var nextCaptureRequestID: UInt64 = 0
+    private var sessionState: SessionState = .idle
 
     var onStillImageReady: ((StillImage) -> Void)?
 
@@ -33,20 +45,30 @@ final class CaptureSessionCoordinator {
     }
 
     func beginCaptureSession() {
+        let request = makeNextCaptureRequest()
+        let existingOverlayWindowController = presentedOverlayWindowController
+
+        // Move to the new request before dismissing any older overlay so a close callback
+        // from the previous window cannot clear the newer in-flight session.
+        sessionState = .capturing(request)
+        existingOverlayWindowController?.dismissOverlay()
+
         captureStillImageForActiveScreen { [weak self] result in
-            switch result {
-            case .success(let stillImage):
-                if let onStillImageReady = self?.onStillImageReady {
-                    onStillImageReady(stillImage)
-                } else {
-                    NSLog(
-                        "Captured still image for display \(stillImage.displayID) (\(stillImage.image.width)x\(stillImage.image.height))."
-                    )
-                }
-            case .failure(let error):
-                NSLog("Still capture failed: \(error.localizedDescription)")
+            guard let self else {
+                return
             }
+
+            self.handleCaptureResult(result, for: request)
         }
+    }
+
+    func dismissCaptureOverlay() {
+        guard let overlayWindowController = presentedOverlayWindowController else {
+            return
+        }
+
+        sessionState = .idle
+        overlayWindowController.dismissOverlay()
     }
 
     func captureStillImageForActiveScreen(completion: @escaping StillImageCompletion) {
@@ -83,6 +105,88 @@ final class CaptureSessionCoordinator {
         }
     }
 
+    private var presentedOverlayWindowController: CaptureOverlayWindowController? {
+        guard case .presenting(_, let overlayWindowController) = sessionState else {
+            return nil
+        }
+
+        return overlayWindowController
+    }
+
+    private func makeNextCaptureRequest() -> CaptureRequest {
+        nextCaptureRequestID += 1
+        return CaptureRequest(id: nextCaptureRequestID)
+    }
+
+    private func handleCaptureResult(_ result: Result<StillImage, Error>, for request: CaptureRequest) {
+        guard case .capturing(let activeRequest) = sessionState, activeRequest == request else {
+            logDiscardedCaptureResult(result, for: request)
+            return
+        }
+
+        switch result {
+        case .success(let stillImage):
+            presentOverlay(for: stillImage, request: request)
+
+            if let onStillImageReady = onStillImageReady {
+                onStillImageReady(stillImage)
+            } else {
+                NSLog("Presented capture overlay for display \(stillImage.displayID).")
+            }
+        case .failure(let error):
+            sessionState = .idle
+            NSLog("Still capture failed: \(error.localizedDescription)")
+        }
+    }
+
+    private func presentOverlay(for stillImage: StillImage, request: CaptureRequest) {
+        let overlayWindowController = CaptureOverlayWindowController(
+            screen: stillImage.screen,
+            image: stillImage.image
+        )
+        overlayWindowController.onClose = { [weak self, weak overlayWindowController] in
+            guard let self, let overlayWindowController else {
+                return
+            }
+
+            self.handleOverlayClose(for: request, overlayWindowController: overlayWindowController)
+        }
+
+        sessionState = .presenting(request, overlayWindowController)
+        overlayWindowController.present()
+    }
+
+    private func handleOverlayClose(
+        for request: CaptureRequest,
+        overlayWindowController: CaptureOverlayWindowController
+    ) {
+        guard
+            case .presenting(let activeRequest, let activeOverlayWindowController) = sessionState,
+            activeRequest == request,
+            activeOverlayWindowController === overlayWindowController
+        else {
+            return
+        }
+
+        sessionState = .idle
+    }
+
+    private func logDiscardedCaptureResult(
+        _ result: Result<StillImage, Error>,
+        for request: CaptureRequest
+    ) {
+        switch result {
+        case .success(let stillImage):
+            NSLog(
+                "Discarded stale still capture result for request \(request.id) on display \(stillImage.displayID)."
+            )
+        case .failure(let error):
+            NSLog(
+                "Discarded stale still capture failure for request \(request.id): \(error.localizedDescription)"
+            )
+        }
+    }
+
     private func complete(_ completion: @escaping StillImageCompletion, with result: Result<StillImage, Error>) {
         if Thread.isMainThread {
             completion(result)
@@ -91,6 +195,98 @@ final class CaptureSessionCoordinator {
                 completion(result)
             }
         }
+    }
+}
+
+final class CaptureOverlayWindowController: NSWindowController, NSWindowDelegate {
+    var onClose: (() -> Void)?
+
+    private let screen: NSScreen
+
+    init(screen: NSScreen, image: CGImage) {
+        self.screen = screen
+
+        let window = CaptureOverlayWindow(
+            contentRect: screen.frame,
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false,
+            screen: screen
+        )
+        window.isReleasedWhenClosed = false
+        window.hasShadow = false
+        window.backgroundColor = .black
+        window.isOpaque = true
+        window.level = .screenSaver
+        window.collectionBehavior = [.fullScreenAuxiliary, .stationary]
+        window.animationBehavior = .none
+
+        super.init(window: window)
+
+        window.delegate = self
+        window.contentView = Self.makeContentView(for: screen, image: image)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    func present() {
+        guard let window else {
+            return
+        }
+
+        window.setFrame(screen.frame, display: true)
+        showWindow(nil)
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    func dismissOverlay() {
+        close()
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        onClose?()
+    }
+
+    private static func makeContentView(for screen: NSScreen, image: CGImage) -> NSView {
+        let imageView = NSImageView()
+        imageView.translatesAutoresizingMaskIntoConstraints = false
+        imageView.image = NSImage(cgImage: image, size: screen.frame.size)
+        imageView.imageScaling = .scaleAxesIndependently
+
+        let contentView = NSView(frame: screen.frame)
+        contentView.addSubview(imageView)
+
+        NSLayoutConstraint.activate([
+            imageView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
+            imageView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
+            imageView.topAnchor.constraint(equalTo: contentView.topAnchor),
+            imageView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor)
+        ])
+
+        return contentView
+    }
+}
+
+private final class CaptureOverlayWindow: NSWindow {
+    override var canBecomeKey: Bool {
+        true
+    }
+
+    override var canBecomeMain: Bool {
+        true
+    }
+
+    override func sendEvent(_ event: NSEvent) {
+        if event.type == .keyDown, event.keyCode == 53 {
+            close()
+            return
+        }
+
+        super.sendEvent(event)
     }
 }
 
