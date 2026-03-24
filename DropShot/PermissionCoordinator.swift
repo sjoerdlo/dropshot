@@ -17,6 +17,10 @@ final class PermissionCoordinator {
     private let notificationCenter: NotificationCenter
     private var shouldOfferSettingsShortcut = false
 
+    var hasScreenRecordingPermission: Bool {
+        CGPreflightScreenCaptureAccess()
+    }
+
     init(notificationCenter: NotificationCenter = .default) {
         self.notificationCenter = notificationCenter
         notificationCenter.addObserver(
@@ -32,7 +36,7 @@ final class PermissionCoordinator {
     }
 
     func ensureScreenRecordingPermission() -> Bool {
-        guard !CGPreflightScreenCaptureAccess() else {
+        guard !hasScreenRecordingPermission else {
             shouldOfferSettingsShortcut = false
             permissionWindowController.closeWindow()
             return true
@@ -82,7 +86,7 @@ final class PermissionCoordinator {
 
     @objc
     private func handleApplicationDidBecomeActive(_ notification: Notification) {
-        guard CGPreflightScreenCaptureAccess() else {
+        guard hasScreenRecordingPermission else {
             return
         }
 

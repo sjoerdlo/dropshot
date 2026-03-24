@@ -203,11 +203,6 @@ final class CaptureSessionCoordinator {
     }
 
     func captureStillImageForActiveScreen(completion: @escaping StillImageCompletion) {
-        guard permissionCoordinator.ensureScreenRecordingPermission() else {
-            complete(completion, with: .failure(ScreenCaptureError.permissionRequired))
-            return
-        }
-
         let mouseLocation = NSEvent.mouseLocation
         guard let screen = activeScreenUnderCursor(at: mouseLocation) else {
             complete(
@@ -222,11 +217,26 @@ final class CaptureSessionCoordinator {
             return
         }
 
-        screenCaptureManager.captureStillImage(for: displayID) { [screen] result in
-            let mappedResult = result.map { image in
-                StillImage(screen: screen, displayID: displayID, image: image)
+        screenCaptureManager.captureStillImage(for: displayID) { [screen, weak self] result in
+            guard let self else {
+                return
             }
-            self.complete(completion, with: mappedResult)
+
+            switch result {
+            case .success(let image):
+                self.complete(
+                    completion,
+                    with: .success(StillImage(screen: screen, displayID: displayID, image: image))
+                )
+            case .failure(let error):
+                guard !self.permissionCoordinator.hasScreenRecordingPermission else {
+                    self.complete(completion, with: .failure(error))
+                    return
+                }
+
+                _ = self.permissionCoordinator.ensureScreenRecordingPermission()
+                self.complete(completion, with: .failure(ScreenCaptureError.permissionRequired))
+            }
         }
     }
 
