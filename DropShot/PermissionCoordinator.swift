@@ -15,6 +15,7 @@ final class PermissionCoordinator {
     )
 
     private let notificationCenter: NotificationCenter
+    private var pollTimer: Timer?
     private var shouldOfferSettingsShortcut = false
 
     var hasScreenRecordingPermission: Bool {
@@ -32,17 +33,20 @@ final class PermissionCoordinator {
     }
 
     deinit {
+        pollTimer?.invalidate()
         notificationCenter.removeObserver(self)
     }
 
     func ensureScreenRecordingPermission() -> Bool {
         guard !hasScreenRecordingPermission else {
             shouldOfferSettingsShortcut = false
+            pollTimer?.invalidate()
             permissionWindowController.closeWindow()
             return true
         }
 
         permissionWindowController.present(for: currentStep)
+        startPermissionPolling()
         return false
     }
 
@@ -60,19 +64,22 @@ final class PermissionCoordinator {
     }
 
     private func handleDismiss() {
+        pollTimer?.invalidate()
         permissionWindowController.closeWindow()
     }
 
     private func requestScreenRecordingPermission() {
-        let granted = CGRequestScreenCaptureAccess() || CGPreflightScreenCaptureAccess()
-        guard !granted else {
-            shouldOfferSettingsShortcut = false
-            permissionWindowController.closeWindow()
-            return
-        }
-
         shouldOfferSettingsShortcut = true
         permissionWindowController.present(for: .openSettings)
+        startPermissionPolling()
+        openScreenRecordingSettings()
+    }
+
+    private func startPermissionPolling() {
+        pollTimer?.invalidate()
+        pollTimer = Timer.scheduledTimer(withTimeInterval: 0.75, repeats: true) { [weak self] _ in
+            self?.handlePermissionStatusRefresh()
+        }
     }
 
     private func openScreenRecordingSettings() {
@@ -80,16 +87,20 @@ final class PermissionCoordinator {
             return
         }
 
-        permissionWindowController.closeWindow()
         NSWorkspace.shared.open(settingsURL)
     }
 
     @objc
     private func handleApplicationDidBecomeActive(_ notification: Notification) {
+        handlePermissionStatusRefresh()
+    }
+
+    private func handlePermissionStatusRefresh() {
         guard hasScreenRecordingPermission else {
             return
         }
 
+        pollTimer?.invalidate()
         shouldOfferSettingsShortcut = false
         permissionWindowController.closeWindow()
     }

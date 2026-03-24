@@ -7,9 +7,9 @@ enum PermissionWindowStep {
     var bodyText: String {
         switch self {
         case .requestAccess:
-            return "DropShot needs Screen Recording access before Capture can start. Continue so macOS can register DropShot for this permission."
+            return "DropShot needs Screen Recording access before Capture can start. Continue and we'll open System Settings > Privacy & Security > Screen Recording for you."
         case .openSettings:
-            return "Turn on DropShot in System Settings > Privacy & Security > Screen Recording. After enabling it, fully quit and relaunch DropShot before trying Capture again. If you're running from Xcode, press Stop and then Run again."
+            return "Turn on DropShot in System Settings > Privacy & Security > Screen Recording. If you're running from Xcode, use a Development Team in Signing & Capabilities instead of Sign to Run Locally, then stop and run the app again so permission can persist across launches."
         }
     }
 
