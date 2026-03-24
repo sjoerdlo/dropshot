@@ -64,6 +64,7 @@ final class CaptureOverlayWindowController: NSWindowController, NSWindowDelegate
             return
         }
 
+        selectionOverlayView.enterLiveScrollMode()
         captureImageView.isHidden = true
         window.backgroundColor = .clear
         window.isOpaque = false

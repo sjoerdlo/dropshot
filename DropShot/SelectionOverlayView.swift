@@ -19,6 +19,11 @@ final class SelectionOverlayView: NSView {
         }
     }
 
+    enum DisplayMode: Equatable {
+        case selection
+        case liveScroll
+    }
+
     var onSelectionCompleted: ((CGRect) -> Void)?
 
     private(set) var state: State = .idle {
@@ -26,11 +31,22 @@ final class SelectionOverlayView: NSView {
             needsDisplay = true
         }
     }
+    private var displayMode: DisplayMode = .selection {
+        didSet {
+            needsDisplay = true
+        }
+    }
 
     private let minimumSelectionLength: CGFloat = 8
+    private let cornerGuideLength: CGFloat = 14
+    private let cornerGuideInset: CGFloat = 1
 
     override var acceptsFirstResponder: Bool {
         true
+    }
+
+    override var isOpaque: Bool {
+        false
     }
 
     override init(frame frameRect: NSRect) {
@@ -44,12 +60,28 @@ final class SelectionOverlayView: NSView {
         fatalError("init(coder:) has not been implemented")
     }
 
+    func enterLiveScrollMode() {
+        guard case .selected = state else {
+            return
+        }
+
+        displayMode = .liveScroll
+    }
+
     override func mouseDown(with event: NSEvent) {
+        guard displayMode == .selection else {
+            return
+        }
+
         let point = clampedPoint(for: event)
         state = .selecting(anchor: point, currentRect: CGRect(origin: point, size: .zero))
     }
 
     override func mouseDragged(with event: NSEvent) {
+        guard displayMode == .selection else {
+            return
+        }
+
         guard case .selecting(let anchor, _) = state else {
             return
         }
@@ -62,6 +94,10 @@ final class SelectionOverlayView: NSView {
     }
 
     override func mouseUp(with event: NSEvent) {
+        guard displayMode == .selection else {
+            return
+        }
+
         guard case .selecting(let anchor, _) = state else {
             return
         }
@@ -92,25 +128,11 @@ final class SelectionOverlayView: NSView {
             return
         }
 
-        let dimmedBoundsPath = NSBezierPath(rect: bounds)
-        dimmedBoundsPath.appendRect(selectionRect)
-        dimmedBoundsPath.windingRule = .evenOdd
+        if displayMode == .selection {
+            drawSelectionBackdrop(inside: selectionRect)
+        }
 
-        NSColor.black.withAlphaComponent(0.28).setFill()
-        dimmedBoundsPath.fill()
-
-        NSColor.white.withAlphaComponent(0.08).setFill()
-        NSBezierPath(rect: selectionRect).fill()
-
-        let shadowPath = NSBezierPath(rect: selectionRect.insetBy(dx: -1, dy: -1))
-        shadowPath.lineWidth = 2
-        NSColor.black.withAlphaComponent(0.55).setStroke()
-        shadowPath.stroke()
-
-        let selectionPath = NSBezierPath(rect: selectionRect)
-        selectionPath.lineWidth = 2
-        NSColor.white.withAlphaComponent(0.95).setStroke()
-        selectionPath.stroke()
+        drawSelectionBorder(around: selectionRect)
     }
 
     private func clampedPoint(for event: NSEvent) -> CGPoint {
@@ -127,5 +149,72 @@ final class SelectionOverlayView: NSView {
             width: abs(endPoint.x - startPoint.x),
             height: abs(endPoint.y - startPoint.y)
         )
+    }
+
+    private func drawSelectionBackdrop(inside selectionRect: CGRect) {
+        let dimmedBoundsPath = NSBezierPath(rect: bounds)
+        dimmedBoundsPath.appendRect(selectionRect)
+        dimmedBoundsPath.windingRule = .evenOdd
+
+        NSColor.black.withAlphaComponent(0.28).setFill()
+        dimmedBoundsPath.fill()
+
+        NSColor.white.withAlphaComponent(0.08).setFill()
+        NSBezierPath(rect: selectionRect).fill()
+    }
+
+    private func drawSelectionBorder(around selectionRect: CGRect) {
+        let shadowPath = NSBezierPath(rect: selectionRect.insetBy(dx: -1, dy: -1))
+        shadowPath.lineWidth = displayMode == .liveScroll ? 4 : 2
+        NSColor.black.withAlphaComponent(displayMode == .liveScroll ? 0.72 : 0.55).setStroke()
+        shadowPath.stroke()
+
+        let selectionPath = NSBezierPath(rect: selectionRect)
+        selectionPath.lineWidth = 2
+        NSColor.white.withAlphaComponent(0.95).setStroke()
+        selectionPath.stroke()
+
+        guard displayMode == .liveScroll else {
+            return
+        }
+
+        drawCornerGuides(around: selectionRect)
+    }
+
+    private func drawCornerGuides(around selectionRect: CGRect) {
+        let insetRect = selectionRect.insetBy(dx: cornerGuideInset, dy: cornerGuideInset)
+        let guideLength = min(cornerGuideLength, max(0, min(insetRect.width, insetRect.height) / 2))
+        guard guideLength > 0 else {
+            return
+        }
+
+        let cornerPaths = [
+            linePath(from: CGPoint(x: insetRect.minX, y: insetRect.minY), to: CGPoint(x: insetRect.minX + guideLength, y: insetRect.minY)),
+            linePath(from: CGPoint(x: insetRect.minX, y: insetRect.minY), to: CGPoint(x: insetRect.minX, y: insetRect.minY + guideLength)),
+            linePath(from: CGPoint(x: insetRect.maxX, y: insetRect.minY), to: CGPoint(x: insetRect.maxX - guideLength, y: insetRect.minY)),
+            linePath(from: CGPoint(x: insetRect.maxX, y: insetRect.minY), to: CGPoint(x: insetRect.maxX, y: insetRect.minY + guideLength)),
+            linePath(from: CGPoint(x: insetRect.minX, y: insetRect.maxY), to: CGPoint(x: insetRect.minX + guideLength, y: insetRect.maxY)),
+            linePath(from: CGPoint(x: insetRect.minX, y: insetRect.maxY), to: CGPoint(x: insetRect.minX, y: insetRect.maxY - guideLength)),
+            linePath(from: CGPoint(x: insetRect.maxX, y: insetRect.maxY), to: CGPoint(x: insetRect.maxX - guideLength, y: insetRect.maxY)),
+            linePath(from: CGPoint(x: insetRect.maxX, y: insetRect.maxY), to: CGPoint(x: insetRect.maxX, y: insetRect.maxY - guideLength))
+        ]
+
+        for cornerPath in cornerPaths {
+            cornerPath.lineWidth = 5
+            NSColor.black.withAlphaComponent(0.78).setStroke()
+            cornerPath.stroke()
+
+            cornerPath.lineWidth = 3
+            NSColor.white.withAlphaComponent(0.98).setStroke()
+            cornerPath.stroke()
+        }
+    }
+
+    private func linePath(from startPoint: CGPoint, to endPoint: CGPoint) -> NSBezierPath {
+        let path = NSBezierPath()
+        path.lineCapStyle = .round
+        path.move(to: startPoint)
+        path.line(to: endPoint)
+        return path
     }
 }
