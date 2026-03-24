@@ -2,6 +2,45 @@ import AppKit
 import CoreGraphics
 import Foundation
 
+protocol CaptureOverlayPresenting: AnyObject {
+    var onClose: (() -> Void)? { get set }
+    var onSelectionFinalized: ((CGRect) -> Void)? { get set }
+    var selectedRect: CGRect? { get }
+
+    func present()
+    func dismissOverlay()
+    func enterPassthroughMode()
+}
+
+protocol ScrollControlPanelPresenting: AnyObject {
+    var onDone: (() -> Void)? { get set }
+    var onCancel: (() -> Void)? { get set }
+
+    func present(anchoredTo selectionRect: CGRect, on screen: NSScreen)
+    func dismiss()
+}
+
+protocol ScrollCaptureSessionControlling: AnyObject {
+    var onEscapePressed: (() -> Void)? { get set }
+    var onFailure: ((Error) -> Void)? { get set }
+
+    func startSession(
+        for selectedRegion: CaptureSessionCoordinator.SelectedRegion,
+        completion: @escaping (Result<Void, Error>) -> Void
+    )
+    func finishSession(
+        completion: @escaping (Result<ScrollCaptureController.CompletedSession, Error>) -> Void
+    )
+    func cancelSession(completion: ((Result<Void, Error>) -> Void)?)
+}
+
+protocol ResultWindowPresenting: AnyObject {
+    var onClose: (() -> Void)? { get set }
+
+    func present()
+    func close()
+}
+
 final class CaptureSessionCoordinator {
     struct StillImage {
         let screen: NSScreen
@@ -34,18 +73,18 @@ final class CaptureSessionCoordinator {
     private final class PresentationSession {
         let request: CaptureRequest
         let stillImage: StillImage
-        let overlayWindowController: CaptureOverlayWindowController
-        let controlPanelController: ScrollControlPanelController
-        let scrollCaptureController: ScrollCaptureController
+        let overlayWindowController: CaptureOverlayPresenting
+        let controlPanelController: ScrollControlPanelPresenting
+        let scrollCaptureController: ScrollCaptureSessionControlling
 
         var selectedRegion: SelectedRegion?
 
         init(
             request: CaptureRequest,
             stillImage: StillImage,
-            overlayWindowController: CaptureOverlayWindowController,
-            controlPanelController: ScrollControlPanelController,
-            scrollCaptureController: ScrollCaptureController
+            overlayWindowController: CaptureOverlayPresenting,
+            controlPanelController: ScrollControlPanelPresenting,
+            scrollCaptureController: ScrollCaptureSessionControlling
         ) {
             self.request = request
             self.stillImage = stillImage
@@ -67,12 +106,18 @@ final class CaptureSessionCoordinator {
     }
 
     typealias StillImageCompletion = (Result<StillImage, Error>) -> Void
+    typealias StillImageCaptureHandler = (@escaping StillImageCompletion) -> Void
 
     private let permissionCoordinator: PermissionCoordinator
     private let screenCaptureManager: ScreenCaptureManaging
+    private let stillImageCaptureOverride: StillImageCaptureHandler?
+    private let overlayFactory: (StillImage) -> CaptureOverlayPresenting
+    private let controlPanelFactory: () -> ScrollControlPanelPresenting
+    private let scrollCaptureFactory: () -> ScrollCaptureSessionControlling
+    private let resultWindowFactory: (CGImage, CGSize, NSScreen?, String) -> ResultWindowPresenting
     private var nextCaptureRequestID: UInt64 = 0
     private var sessionState: SessionState = .idle
-    private var resultWindowController: ResultWindowController?
+    private var resultWindowController: ResultWindowPresenting?
 
     var onStillImageReady: ((StillImage) -> Void)?
     var onSelectedRegion: ((SelectedRegion) -> Void)?
@@ -88,6 +133,38 @@ final class CaptureSessionCoordinator {
     ) {
         self.permissionCoordinator = permissionCoordinator
         self.screenCaptureManager = screenCaptureManager
+        stillImageCaptureOverride = nil
+        overlayFactory = { stillImage in
+            CaptureOverlayWindowController(screen: stillImage.screen, image: stillImage.image)
+        }
+        controlPanelFactory = { ScrollControlPanelController() }
+        scrollCaptureFactory = { ScrollCaptureController(screenCaptureManager: screenCaptureManager) }
+        resultWindowFactory = { image, pointSize, preferredScreen, defaultFileName in
+            ResultWindowController(
+                image: image,
+                pointSize: pointSize,
+                preferredScreen: preferredScreen,
+                defaultFileName: defaultFileName
+            )
+        }
+    }
+
+    init(
+        permissionCoordinator: PermissionCoordinator = PermissionCoordinator(),
+        screenCaptureManager: ScreenCaptureManaging = ScreenCaptureManager(),
+        stillImageCaptureOverride: StillImageCaptureHandler? = nil,
+        overlayFactory: @escaping (StillImage) -> CaptureOverlayPresenting,
+        controlPanelFactory: @escaping () -> ScrollControlPanelPresenting,
+        scrollCaptureFactory: @escaping () -> ScrollCaptureSessionControlling,
+        resultWindowFactory: @escaping (CGImage, CGSize, NSScreen?, String) -> ResultWindowPresenting
+    ) {
+        self.permissionCoordinator = permissionCoordinator
+        self.screenCaptureManager = screenCaptureManager
+        self.stillImageCaptureOverride = stillImageCaptureOverride
+        self.overlayFactory = overlayFactory
+        self.controlPanelFactory = controlPanelFactory
+        self.scrollCaptureFactory = scrollCaptureFactory
+        self.resultWindowFactory = resultWindowFactory
     }
 
     func beginCaptureSession() {
@@ -101,10 +178,11 @@ final class CaptureSessionCoordinator {
         sessionState = .capturing(request)
         resultWindowController?.close()
         resultWindowController = nil
-        existingPresentationSession?.scrollCaptureController.cancelSession()
+        existingPresentationSession?.scrollCaptureController.cancelSession(completion: nil)
         existingPresentationSession?.dismissWindows()
 
-        captureStillImageForActiveScreen { [weak self] result in
+        let captureStillImage = stillImageCaptureOverride ?? captureStillImageForActiveScreen
+        captureStillImage { [weak self] result in
             guard let self else {
                 return
             }
@@ -120,7 +198,7 @@ final class CaptureSessionCoordinator {
 
         selectedRegion = nil
         sessionState = .idle
-        presentationSession.scrollCaptureController.cancelSession()
+        presentationSession.scrollCaptureController.cancelSession(completion: nil)
         presentationSession.dismissWindows()
     }
 
@@ -193,12 +271,9 @@ final class CaptureSessionCoordinator {
     }
 
     private func presentOverlay(for stillImage: StillImage, request: CaptureRequest) {
-        let overlayWindowController = CaptureOverlayWindowController(
-            screen: stillImage.screen,
-            image: stillImage.image
-        )
-        let controlPanelController = ScrollControlPanelController()
-        let scrollCaptureController = ScrollCaptureController(screenCaptureManager: screenCaptureManager)
+        let overlayWindowController = overlayFactory(stillImage)
+        let controlPanelController = controlPanelFactory()
+        let scrollCaptureController = scrollCaptureFactory()
         let presentationSession = PresentationSession(
             request: request,
             stillImage: stillImage,
@@ -436,7 +511,7 @@ final class CaptureSessionCoordinator {
         presentationSession.selectedRegion = nil
         selectedRegion = nil
         sessionState = .idle
-        presentationSession.scrollCaptureController.cancelSession()
+        presentationSession.scrollCaptureController.cancelSession(completion: nil)
         presentationSession.dismissWindows()
 
         if let onSessionCancelled {
@@ -480,11 +555,11 @@ final class CaptureSessionCoordinator {
             for: completedSession.composite.metadata.compositePixelSize
         )
 
-        let windowController = ResultWindowController(
-            image: completedSession.composite.image,
-            pointSize: pointSize,
-            preferredScreen: selectedRegion.stillImage.screen,
-            defaultFileName: ResultWindowController.defaultFileName(for: completedSession.endedAt)
+        let windowController = resultWindowFactory(
+            completedSession.composite.image,
+            pointSize,
+            selectedRegion.stillImage.screen,
+            ResultWindowController.defaultFileName(for: completedSession.endedAt)
         )
         windowController.onClose = { [weak self, weak windowController] in
             guard let self else {
@@ -510,3 +585,11 @@ final class CaptureSessionCoordinator {
         }
     }
 }
+
+extension CaptureOverlayWindowController: CaptureOverlayPresenting {}
+
+extension ScrollControlPanelController: ScrollControlPanelPresenting {}
+
+extension ScrollCaptureController: ScrollCaptureSessionControlling {}
+
+extension ResultWindowController: ResultWindowPresenting {}
