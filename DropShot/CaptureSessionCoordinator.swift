@@ -7,6 +7,19 @@ final class CaptureSessionCoordinator {
         let screen: NSScreen
         let displayID: CGDirectDisplayID
         let image: CGImage
+
+        var pointPixelScale: CGFloat {
+            let screenSize = screen.frame.size
+            let widthScale = CGFloat(image.width) / max(screenSize.width, 1)
+            let heightScale = CGFloat(image.height) / max(screenSize.height, 1)
+            let resolvedScale = max(widthScale, heightScale)
+            return resolvedScale.isFinite && resolvedScale > 0 ? resolvedScale : 1
+        }
+
+        func pointSize(for pixelSize: CGSize) -> CGSize {
+            let scale = pointPixelScale
+            return CGSize(width: pixelSize.width / scale, height: pixelSize.height / scale)
+        }
     }
 
     struct SelectedRegion {
@@ -59,6 +72,7 @@ final class CaptureSessionCoordinator {
     private let screenCaptureManager: ScreenCaptureManaging
     private var nextCaptureRequestID: UInt64 = 0
     private var sessionState: SessionState = .idle
+    private var resultWindowController: ResultWindowController?
 
     var onStillImageReady: ((StillImage) -> Void)?
     var onSelectedRegion: ((SelectedRegion) -> Void)?
@@ -85,6 +99,8 @@ final class CaptureSessionCoordinator {
         selectedRegion = nil
         lastCompletedScrollCaptureSession = nil
         sessionState = .capturing(request)
+        resultWindowController?.close()
+        resultWindowController = nil
         existingPresentationSession?.scrollCaptureController.cancelSession()
         existingPresentationSession?.dismissWindows()
 
@@ -370,6 +386,7 @@ final class CaptureSessionCoordinator {
             sessionState = .idle
             presentationSession.dismissWindows()
             lastCompletedScrollCaptureSession = completedSession
+            presentResultWindow(for: completedSession, selectedRegion: selectedRegion)
 
             if let onScrollCaptureSessionCompleted {
                 onScrollCaptureSessionCompleted(completedSession)
@@ -451,6 +468,36 @@ final class CaptureSessionCoordinator {
                 "Discarded stale still capture failure for request \(request.id): \(error.localizedDescription)"
             )
         }
+    }
+
+    private func presentResultWindow(
+        for completedSession: ScrollCaptureController.CompletedSession,
+        selectedRegion: SelectedRegion
+    ) {
+        resultWindowController?.close()
+
+        let pointSize = selectedRegion.stillImage.pointSize(
+            for: completedSession.composite.metadata.compositePixelSize
+        )
+
+        let windowController = ResultWindowController(
+            image: completedSession.composite.image,
+            pointSize: pointSize,
+            preferredScreen: selectedRegion.stillImage.screen,
+            defaultFileName: ResultWindowController.defaultFileName(for: completedSession.endedAt)
+        )
+        windowController.onClose = { [weak self, weak windowController] in
+            guard let self else {
+                return
+            }
+
+            if self.resultWindowController === windowController {
+                self.resultWindowController = nil
+            }
+        }
+
+        resultWindowController = windowController
+        windowController.present()
     }
 
     private func complete(_ completion: @escaping StillImageCompletion, with result: Result<StillImage, Error>) {
