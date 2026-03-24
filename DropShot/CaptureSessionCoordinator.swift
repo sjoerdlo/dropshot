@@ -23,6 +23,7 @@ final class CaptureSessionCoordinator {
         let stillImage: StillImage
         let overlayWindowController: CaptureOverlayWindowController
         let controlPanelController: ScrollControlPanelController
+        let scrollCaptureController: ScrollCaptureController
 
         var selectedRegion: SelectedRegion?
 
@@ -30,12 +31,14 @@ final class CaptureSessionCoordinator {
             request: CaptureRequest,
             stillImage: StillImage,
             overlayWindowController: CaptureOverlayWindowController,
-            controlPanelController: ScrollControlPanelController
+            controlPanelController: ScrollControlPanelController,
+            scrollCaptureController: ScrollCaptureController
         ) {
             self.request = request
             self.stillImage = stillImage
             self.overlayWindowController = overlayWindowController
             self.controlPanelController = controlPanelController
+            self.scrollCaptureController = scrollCaptureController
         }
 
         func dismissWindows() {
@@ -61,7 +64,9 @@ final class CaptureSessionCoordinator {
     var onSelectedRegion: ((SelectedRegion) -> Void)?
     var onSessionCancelled: (() -> Void)?
     var onSessionConfirmed: ((SelectedRegion) -> Void)?
+    var onScrollCaptureSessionCompleted: ((ScrollCaptureController.CompletedSession) -> Void)?
     private(set) var selectedRegion: SelectedRegion?
+    private(set) var lastCompletedScrollCaptureSession: ScrollCaptureController.CompletedSession?
 
     init(
         permissionCoordinator: PermissionCoordinator,
@@ -78,7 +83,9 @@ final class CaptureSessionCoordinator {
         // Move to the new request before dismissing any older overlay so a close callback
         // from the previous window cannot clear the newer in-flight session.
         selectedRegion = nil
+        lastCompletedScrollCaptureSession = nil
         sessionState = .capturing(request)
+        existingPresentationSession?.scrollCaptureController.cancelSession()
         existingPresentationSession?.dismissWindows()
 
         captureStillImageForActiveScreen { [weak self] result in
@@ -97,6 +104,7 @@ final class CaptureSessionCoordinator {
 
         selectedRegion = nil
         sessionState = .idle
+        presentationSession.scrollCaptureController.cancelSession()
         presentationSession.dismissWindows()
     }
 
@@ -174,11 +182,13 @@ final class CaptureSessionCoordinator {
             image: stillImage.image
         )
         let controlPanelController = ScrollControlPanelController()
+        let scrollCaptureController = ScrollCaptureController(screenCaptureManager: screenCaptureManager)
         let presentationSession = PresentationSession(
             request: request,
             stillImage: stillImage,
             overlayWindowController: overlayWindowController,
-            controlPanelController: controlPanelController
+            controlPanelController: controlPanelController,
+            scrollCaptureController: scrollCaptureController
         )
 
         overlayWindowController.onSelectionFinalized = { [weak self, weak presentationSession] selectedRect in
@@ -209,6 +219,20 @@ final class CaptureSessionCoordinator {
 
             self.handleControlPanelCancel(for: presentationSession)
         }
+        scrollCaptureController.onEscapePressed = { [weak self, weak presentationSession] in
+            guard let self, let presentationSession else {
+                return
+            }
+
+            self.handleEscapeRequest(for: presentationSession)
+        }
+        scrollCaptureController.onFailure = { [weak self, weak presentationSession] error in
+            guard let self, let presentationSession else {
+                return
+            }
+
+            self.handleScrollCaptureFailure(error, for: presentationSession)
+        }
 
         sessionState = .presenting(presentationSession)
         overlayWindowController.present()
@@ -232,16 +256,17 @@ final class CaptureSessionCoordinator {
         presentationSession.selectedRegion = selectedRegion
         self.selectedRegion = selectedRegion
         presentationSession.overlayWindowController.enterPassthroughMode()
-        presentationSession.controlPanelController.present(
-            anchoredTo: selectedRect,
-            on: presentationSession.stillImage.screen
-        )
+        presentationSession.scrollCaptureController.startSession(for: selectedRegion) {
+            [weak self, weak presentationSession] result in
+            guard let self, let presentationSession else {
+                return
+            }
 
-        if let onSelectedRegion {
-            onSelectedRegion(selectedRegion)
-        } else {
-            NSLog(
-                "Selected capture rect \(NSStringFromRect(selectedRect)) on display \(presentationSession.stillImage.displayID)."
+            self.handleScrollCaptureStart(
+                result,
+                selectedRect: selectedRect,
+                selectedRegion: selectedRegion,
+                for: presentationSession
             )
         }
     }
@@ -254,10 +279,7 @@ final class CaptureSessionCoordinator {
             return
         }
 
-        presentationSession.controlPanelController.dismiss()
-        presentationSession.selectedRegion = nil
-        selectedRegion = nil
-        sessionState = .idle
+        cancelPresentationSession(presentationSession)
     }
 
     private func handleControlPanelCancel(for presentationSession: PresentationSession) {
@@ -268,16 +290,7 @@ final class CaptureSessionCoordinator {
             return
         }
 
-        presentationSession.selectedRegion = nil
-        selectedRegion = nil
-        sessionState = .idle
-        presentationSession.dismissWindows()
-
-        if let onSessionCancelled {
-            onSessionCancelled()
-        } else {
-            NSLog("Cancelled capture session for display \(presentationSession.stillImage.displayID).")
-        }
+        cancelPresentationSession(presentationSession)
     }
 
     private func handleControlPanelDone(for presentationSession: PresentationSession) {
@@ -291,16 +304,136 @@ final class CaptureSessionCoordinator {
 
         self.selectedRegion = nil
         presentationSession.selectedRegion = nil
-        sessionState = .idle
-        presentationSession.dismissWindows()
+        presentationSession.scrollCaptureController.finishSession { [weak self, weak presentationSession] result in
+            guard let self, let presentationSession else {
+                return
+            }
 
-        if let onSessionConfirmed {
-            onSessionConfirmed(selectedRegion)
-        } else {
-            NSLog(
-                "Done requested for capture rect \(NSStringFromRect(selectedRegion.rect)) on display \(selectedRegion.stillImage.displayID)."
+            self.handleFinishedScrollCapture(
+                result,
+                selectedRegion: selectedRegion,
+                for: presentationSession
             )
         }
+    }
+
+    private func handleScrollCaptureStart(
+        _ result: Result<Void, Error>,
+        selectedRect: CGRect,
+        selectedRegion: SelectedRegion,
+        for presentationSession: PresentationSession
+    ) {
+        guard
+            case .presenting(let activePresentationSession) = sessionState,
+            activePresentationSession === presentationSession
+        else {
+            return
+        }
+
+        switch result {
+        case .success:
+            presentationSession.controlPanelController.present(
+                anchoredTo: selectedRect,
+                on: presentationSession.stillImage.screen
+            )
+
+            if let onSelectedRegion {
+                onSelectedRegion(selectedRegion)
+            } else {
+                NSLog(
+                    "Selected capture rect \(NSStringFromRect(selectedRect)) on display \(presentationSession.stillImage.displayID)."
+                )
+            }
+        case .failure(let error):
+            if isCancelledScrollCaptureError(error) {
+                return
+            }
+
+            handleScrollCaptureFailure(error, for: presentationSession)
+        }
+    }
+
+    private func handleFinishedScrollCapture(
+        _ result: Result<ScrollCaptureController.CompletedSession, Error>,
+        selectedRegion: SelectedRegion,
+        for presentationSession: PresentationSession
+    ) {
+        guard
+            case .presenting(let activePresentationSession) = sessionState,
+            activePresentationSession === presentationSession
+        else {
+            return
+        }
+
+        switch result {
+        case .success(let completedSession):
+            sessionState = .idle
+            presentationSession.dismissWindows()
+            lastCompletedScrollCaptureSession = completedSession
+
+            if let onScrollCaptureSessionCompleted {
+                onScrollCaptureSessionCompleted(completedSession)
+            } else {
+                NSLog(
+                    "Collected \(completedSession.strips.count) strips for capture rect \(NSStringFromRect(selectedRegion.rect)) on display \(selectedRegion.stillImage.displayID)."
+                )
+            }
+
+            if let onSessionConfirmed {
+                onSessionConfirmed(selectedRegion)
+            } else {
+                NSLog(
+                    "Done requested for capture rect \(NSStringFromRect(selectedRegion.rect)) on display \(selectedRegion.stillImage.displayID)."
+                )
+            }
+        case .failure(let error):
+            handleScrollCaptureFailure(error, for: presentationSession)
+        }
+    }
+
+    private func handleEscapeRequest(for presentationSession: PresentationSession) {
+        guard
+            case .presenting(let activePresentationSession) = sessionState,
+            activePresentationSession === presentationSession
+        else {
+            return
+        }
+
+        cancelPresentationSession(presentationSession)
+    }
+
+    private func handleScrollCaptureFailure(_ error: Error, for presentationSession: PresentationSession) {
+        guard
+            case .presenting(let activePresentationSession) = sessionState,
+            activePresentationSession === presentationSession
+        else {
+            return
+        }
+
+        NSLog("Scroll capture failed: \(error.localizedDescription)")
+        cancelPresentationSession(presentationSession)
+    }
+
+    private func cancelPresentationSession(_ presentationSession: PresentationSession) {
+        presentationSession.selectedRegion = nil
+        selectedRegion = nil
+        sessionState = .idle
+        presentationSession.scrollCaptureController.cancelSession()
+        presentationSession.dismissWindows()
+
+        if let onSessionCancelled {
+            onSessionCancelled()
+        } else {
+            NSLog("Cancelled capture session for display \(presentationSession.stillImage.displayID).")
+        }
+    }
+
+    private func isCancelledScrollCaptureError(_ error: Error) -> Bool {
+        guard let scrollCaptureError = error as? ScrollCaptureController.ScrollCaptureError else {
+            return false
+        }
+
+        return scrollCaptureError == .cancelled
     }
 
     private func logDiscardedCaptureResult(

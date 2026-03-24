@@ -63,6 +63,8 @@ final class ScrollControlPanelController: NSWindowController, NSWindowDelegate {
         let cancelButton = NSButton(title: "Cancel", target: self, action: #selector(handleCancel(_:)))
         cancelButton.bezelStyle = .rounded
         cancelButton.controlSize = .large
+        cancelButton.keyEquivalent = "\u{1b}"
+        cancelButton.keyEquivalentModifierMask = []
 
         let doneButton = NSButton(title: "Done", target: self, action: #selector(handleDone(_:)))
         doneButton.bezelStyle = .rounded
