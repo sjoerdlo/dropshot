@@ -11,6 +11,8 @@
 		2C45B4E12C3A100100000001 /* CaptureSessionCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C45B4E12C3A200100000001 /* CaptureSessionCoordinator.swift */; };
 		2C45B4E12C3A100100000002 /* PermissionCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C45B4E12C3A200100000002 /* PermissionCoordinator.swift */; };
 		2C45B4E12C3A100100000003 /* PermissionWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C45B4E12C3A200100000003 /* PermissionWindowController.swift */; };
+		2C45B4E12C3A100100000004 /* CaptureOverlayWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C45B4E12C3A200100000004 /* CaptureOverlayWindowController.swift */; };
+		2C45B4E12C3A100100000005 /* ScreenCaptureManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C45B4E12C3A200100000005 /* ScreenCaptureManager.swift */; };
 		B10814BFF6EE5AB7075F37FE /* DropShotTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DB8BC0D84EAC7D6D13C908E5 /* DropShotTests.swift */; };
 		F885A998A42122E6FF1CAD1C /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A719B51C8C9B0C392F71075 /* main.swift */; };
 /* End PBXBuildFile section */
@@ -30,6 +32,8 @@
 		2C45B4E12C3A200100000001 /* CaptureSessionCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureSessionCoordinator.swift; sourceTree = "<group>"; };
 		2C45B4E12C3A200100000002 /* PermissionCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PermissionCoordinator.swift; sourceTree = "<group>"; };
 		2C45B4E12C3A200100000003 /* PermissionWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PermissionWindowController.swift; sourceTree = "<group>"; };
+		2C45B4E12C3A200100000004 /* CaptureOverlayWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureOverlayWindowController.swift; sourceTree = "<group>"; };
+		2C45B4E12C3A200100000005 /* ScreenCaptureManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenCaptureManager.swift; sourceTree = "<group>"; };
 		4072B5074EC11791ADDFCA29 /* DropShotTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = DropShotTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		6A719B51C8C9B0C392F71075 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
 		92F4410A5FFB48DBE401B3A6 /* DropShot.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = DropShot.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -51,8 +55,10 @@
 			children = (
 				255CD4E906BB76AB26BDD108 /* AppDelegate.swift */,
 				2C45B4E12C3A200100000001 /* CaptureSessionCoordinator.swift */,
+				2C45B4E12C3A200100000004 /* CaptureOverlayWindowController.swift */,
 				2C45B4E12C3A200100000002 /* PermissionCoordinator.swift */,
 				2C45B4E12C3A200100000003 /* PermissionWindowController.swift */,
+				2C45B4E12C3A200100000005 /* ScreenCaptureManager.swift */,
 				6A719B51C8C9B0C392F71075 /* main.swift */,
 			);
 			path = DropShot;
@@ -159,8 +165,10 @@
 			files = (
 				0F60495BB6A9EEB50E59AB87 /* AppDelegate.swift in Sources */,
 				2C45B4E12C3A100100000001 /* CaptureSessionCoordinator.swift in Sources */,
+				2C45B4E12C3A100100000004 /* CaptureOverlayWindowController.swift in Sources */,
 				2C45B4E12C3A100100000002 /* PermissionCoordinator.swift in Sources */,
 				2C45B4E12C3A100100000003 /* PermissionWindowController.swift in Sources */,
+				2C45B4E12C3A100100000005 /* ScreenCaptureManager.swift in Sources */,
 				F885A998A42122E6FF1CAD1C /* main.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
