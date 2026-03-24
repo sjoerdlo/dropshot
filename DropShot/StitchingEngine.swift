@@ -823,6 +823,11 @@ final class StitchingEngine {
             }
 
             context.interpolationQuality = .none
+            // Core Graphics bitmap contexts use a bottom-left origin by default.
+            // Flip into a top-left coordinate space so copied rows preserve the
+            // same visual orientation as the original capture strips.
+            context.translateBy(x: 0, y: CGFloat(image.height))
+            context.scaleBy(x: 1, y: -1)
             context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
             return true
         }

@@ -33,6 +33,16 @@ final class StitchingEngineTests: XCTestCase {
         XCTAssertEqual(provider.requestCount, 1)
     }
 
+    func testBuildCompositePreservesImageOrientation() throws {
+        let engine = StitchingEngine()
+        let seed = try makeStrip(index: 0, rowBase: 10)
+
+        _ = try engine.addStrip(seed)
+        let composite = try engine.buildComposite()
+
+        XCTAssertEqual(try rowMarkers(of: composite.image), Array(10...33))
+    }
+
     func testAddStripRejectsTinyForwardMovementWithoutChangingComposite() throws {
         let provider = RegistrationProviderStub([
             .success(Self.translation(vertical: 11))
@@ -174,6 +184,8 @@ final class StitchingEngineTests: XCTestCase {
             }
 
             context.interpolationQuality = .none
+            context.translateBy(x: 0, y: CGFloat(image.height))
+            context.scaleBy(x: 1, y: -1)
             context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
             return true
         }
