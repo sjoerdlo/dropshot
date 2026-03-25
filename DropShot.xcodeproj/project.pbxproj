@@ -19,8 +19,8 @@
 		2C45B4E12C3A100100000009 /* StitchingEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C45B4E12C3A200100000009 /* StitchingEngine.swift */; };
 		2C45B4E12C3A10010000000A /* StitchingEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C45B4E12C3A20010000000A /* StitchingEngineTests.swift */; };
 		2C45B4E12C3A10010000000B /* ResultWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C45B4E12C3A20010000000B /* ResultWindowController.swift */; };
-		2C45B4E12C3A10010000000D /* DragThumbnailWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C45B4E12C3A20010000000D /* DragThumbnailWindowController.swift */; };
 		2C45B4E12C3A10010000000C /* CaptureSessionCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C45B4E12C3A20010000000C /* CaptureSessionCoordinatorTests.swift */; };
+		2C45B4E12C3A10010000000D /* DragThumbnailWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C45B4E12C3A20010000000D /* DragThumbnailWindowController.swift */; };
 		B10814BFF6EE5AB7075F37FE /* DropShotTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DB8BC0D84EAC7D6D13C908E5 /* DropShotTests.swift */; };
 		F885A998A42122E6FF1CAD1C /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A719B51C8C9B0C392F71075 /* main.swift */; };
 /* End PBXBuildFile section */
@@ -48,8 +48,8 @@
 		2C45B4E12C3A200100000009 /* StitchingEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StitchingEngine.swift; sourceTree = "<group>"; };
 		2C45B4E12C3A20010000000A /* StitchingEngineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StitchingEngineTests.swift; sourceTree = "<group>"; };
 		2C45B4E12C3A20010000000B /* ResultWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResultWindowController.swift; sourceTree = "<group>"; };
-		2C45B4E12C3A20010000000D /* DragThumbnailWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DragThumbnailWindowController.swift; sourceTree = "<group>"; };
 		2C45B4E12C3A20010000000C /* CaptureSessionCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureSessionCoordinatorTests.swift; sourceTree = "<group>"; };
+		2C45B4E12C3A20010000000D /* DragThumbnailWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DragThumbnailWindowController.swift; sourceTree = "<group>"; };
 		4072B5074EC11791ADDFCA29 /* DropShotTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = DropShotTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		6A719B51C8C9B0C392F71075 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
 		92F4410A5FFB48DBE401B3A6 /* DropShot.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = DropShot.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -243,6 +243,7 @@
 				DEVELOPMENT_TEAM = DKUBJGA7PA;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = DropShot/Info.plist;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -390,6 +391,7 @@
 				DEVELOPMENT_TEAM = DKUBJGA7PA;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = DropShot/Info.plist;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",

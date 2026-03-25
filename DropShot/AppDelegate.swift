@@ -1,5 +1,6 @@
 import AppKit
 import Carbon.HIToolbox
+import ServiceManagement
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
@@ -36,8 +37,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func configureStatusItem() {
-        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        item.button?.title = "DropShot"
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        if let button = item.button {
+            let symbolConfig = NSImage.SymbolConfiguration(pointSize: 14, weight: .medium)
+            if let image = NSImage(systemSymbolName: "viewfinder", accessibilityDescription: "DropShot") {
+                let configured = image.withSymbolConfiguration(symbolConfig) ?? image
+                configured.isTemplate = true
+                button.image = configured
+            } else {
+                button.title = "DS"
+            }
+        }
         item.menu = statusMenu
         statusItem = item
     }
@@ -63,6 +73,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         statusMenu.addItem(.separator())
 
+        let launchAtLoginItem = NSMenuItem(
+            title: "Launch at Login",
+            action: #selector(toggleLaunchAtLogin(_:)),
+            keyEquivalent: ""
+        )
+        launchAtLoginItem.target = self
+        launchAtLoginItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
+        statusMenu.addItem(launchAtLoginItem)
+
+        statusMenu.addItem(.separator())
+
         let quitItem = NSMenuItem(
             title: "Quit DropShot",
             action: #selector(quitApplication(_:)),
@@ -80,6 +101,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc
     private func handleQuickCaptureAction(_ sender: Any?) {
         captureSessionCoordinator.beginQuickCapture()
+    }
+
+    @objc
+    private func toggleLaunchAtLogin(_ sender: NSMenuItem) {
+        do {
+            if SMAppService.mainApp.status == .enabled {
+                try SMAppService.mainApp.unregister()
+                sender.state = .off
+            } else {
+                try SMAppService.mainApp.register()
+                sender.state = .on
+            }
+        } catch {
+            NSLog("Failed to toggle launch at login: \(error.localizedDescription)")
+        }
     }
 
     @objc
