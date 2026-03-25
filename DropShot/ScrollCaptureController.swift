@@ -90,8 +90,8 @@ final class ScrollCaptureController {
 
     private let screenCaptureManager: ScreenCaptureManaging
     private let stitchingEngineFactory: () -> StitchingEngine
-    private let captureSettleDelay: TimeInterval = 0.12
-    private let captureThrottleInterval: TimeInterval = 0.22
+    private let captureSettleDelay: TimeInterval = 0.08
+    private let captureThrottleInterval: TimeInterval = 0.10
     private let escapeHotKeyMonitor = EscapeHotKeyMonitor()
 
     private var activeSession: ActiveSession?
@@ -401,10 +401,24 @@ final class ScrollCaptureController {
             return
         }
 
-        session.pendingScrollCaptureWorkItem?.cancel()
-
         let now = Date()
         let nextAllowedCaptureAt = session.lastCapturedAt?.addingTimeInterval(captureThrottleInterval) ?? now
+
+        // If the throttle interval has already elapsed, capture immediately
+        // instead of waiting for the settle delay.  This ensures we grab
+        // frames *during* a fast scroll, not just after it stops.
+        if now >= nextAllowedCaptureAt && session.pendingScrollCaptureWorkItem == nil {
+            captureStrip(in: session)
+            return
+        }
+
+        // If a throttle-triggered capture is already scheduled, leave it
+        // alone — don't cancel and re-delay.  Only schedule a new work
+        // item when nothing is pending.
+        guard session.pendingScrollCaptureWorkItem == nil else {
+            return
+        }
+
         let scheduledCaptureAt = max(now.addingTimeInterval(captureSettleDelay), nextAllowedCaptureAt)
         let delay = max(0, scheduledCaptureAt.timeIntervalSinceNow)
         let workItem = DispatchWorkItem { [weak self, weak session] in
