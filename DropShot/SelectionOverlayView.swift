@@ -34,9 +34,11 @@ final class SelectionOverlayView: NSView {
     private var displayMode: DisplayMode = .selection {
         didSet {
             needsDisplay = true
-            window?.invalidateCursorRects(for: self)
         }
     }
+
+    private var isSpacebarHeld = false
+    private var lastDragPoint: CGPoint = .zero
 
     private let minimumSelectionLength: CGFloat = 8
     private let cornerGuideLength: CGFloat = 14
@@ -47,14 +49,10 @@ final class SelectionOverlayView: NSView {
     private let sizeLabelOffset: CGFloat = 12
     private let sizeLabelCornerRadius: CGFloat = 5
 
+    private var trackingArea: NSTrackingArea?
+
     override var acceptsFirstResponder: Bool {
         true
-    }
-
-    override func resetCursorRects() {
-        if displayMode == .selection {
-            addCursorRect(bounds, cursor: .crosshair)
-        }
     }
 
     override var isOpaque: Bool {
@@ -72,12 +70,78 @@ final class SelectionOverlayView: NSView {
         fatalError("init(coder:) has not been implemented")
     }
 
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let existing = trackingArea {
+            removeTrackingArea(existing)
+        }
+        let area = NSTrackingArea(
+            rect: bounds,
+            options: [.mouseMoved, .mouseEnteredAndExited, .activeAlways, .cursorUpdate],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(area)
+        trackingArea = area
+    }
+
+    override func cursorUpdate(with event: NSEvent) {
+        if displayMode == .selection {
+            NSCursor.crosshair.set()
+        }
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        if displayMode == .selection {
+            NSCursor.crosshair.set()
+        }
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        if displayMode == .selection {
+            NSCursor.crosshair.set()
+        }
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window != nil {
+            window?.makeFirstResponder(self)
+            if displayMode == .selection {
+                NSCursor.crosshair.set()
+            }
+        }
+    }
+
     func enterLiveScrollMode() {
         guard case .selected = state else {
             return
         }
 
         displayMode = .liveScroll
+        NSCursor.arrow.set()
+    }
+
+    override func keyDown(with event: NSEvent) {
+        if event.keyCode == 49 { // spacebar
+            if !isSpacebarHeld {
+                isSpacebarHeld = true
+            }
+        } else {
+            super.keyDown(with: event)
+        }
+    }
+
+    override func keyUp(with event: NSEvent) {
+        if event.keyCode == 49 { // spacebar
+            isSpacebarHeld = false
+        } else {
+            super.keyUp(with: event)
+        }
+    }
+
+    override func flagsChanged(with event: NSEvent) {
+        super.flagsChanged(with: event)
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -86,6 +150,7 @@ final class SelectionOverlayView: NSView {
         }
 
         let point = clampedPoint(for: event)
+        lastDragPoint = point
         state = .selecting(anchor: point, currentRect: CGRect(origin: point, size: .zero))
     }
 
@@ -94,15 +159,27 @@ final class SelectionOverlayView: NSView {
             return
         }
 
-        guard case .selecting(let anchor, _) = state else {
+        guard case .selecting(let anchor, let currentRect) = state else {
             return
         }
 
         let currentPoint = clampedPoint(for: event)
-        state = .selecting(
-            anchor: anchor,
-            currentRect: Self.normalizedRect(from: anchor, to: currentPoint)
-        )
+
+        if isSpacebarHeld {
+            // Move the entire rectangle: shift anchor by the mouse delta
+            let dx = currentPoint.x - lastDragPoint.x
+            let dy = currentPoint.y - lastDragPoint.y
+            let newAnchor = CGPoint(x: anchor.x + dx, y: anchor.y + dy)
+            let movedRect = currentRect.offsetBy(dx: dx, dy: dy)
+            state = .selecting(anchor: newAnchor, currentRect: movedRect)
+        } else {
+            state = .selecting(
+                anchor: anchor,
+                currentRect: Self.normalizedRect(from: anchor, to: currentPoint)
+            )
+        }
+
+        lastDragPoint = currentPoint
     }
 
     override func mouseUp(with event: NSEvent) {
