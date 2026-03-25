@@ -1,11 +1,12 @@
 import AppKit
 import CoreGraphics
+import CoreImage
 import Foundation
 import ScreenCaptureKit
 
 struct DisplayCaptureContext {
     let displayID: CGDirectDisplayID
-    let displayFrame: CGRect
+    let screenFrame: CGRect
     let pointPixelScale: CGFloat
 
     fileprivate let display: SCDisplay
@@ -103,6 +104,11 @@ final class ScreenCaptureManager: ScreenCaptureManaging {
                 return
             }
 
+            guard let screen = NSScreen.screens.first(where: { $0.displayID == displayID }) else {
+                completion(.failure(ScreenCaptureError.screenDisplayUnavailable))
+                return
+            }
+
             guard let displayMode = CGDisplayCopyDisplayMode(displayID) else {
                 completion(.failure(ScreenCaptureError.displayModeUnavailable(displayID: displayID)))
                 return
@@ -140,8 +146,11 @@ final class ScreenCaptureManager: ScreenCaptureManaging {
                 .success(
                     DisplayCaptureContext(
                         displayID: displayID,
-                        displayFrame: display.frame,
-                        pointPixelScale: pointPixelScale,
+                        screenFrame: screen.frame,
+                        pointPixelScale: max(
+                            screen.backingScaleFactor,
+                            pointPixelScale
+                        ),
                         display: display,
                         excludedApplications: excludedApplications,
                         excludedWindows: excludedWindows
@@ -156,23 +165,47 @@ final class ScreenCaptureManager: ScreenCaptureManaging {
         rect: CGRect,
         completion: @escaping (Result<CGImage, Error>) -> Void
     ) {
-        guard !rect.isNull, !rect.isEmpty else {
+        let clippedRect = rect
+            .standardized
+            .intersection(context.screenFrame)
+
+        guard !clippedRect.isNull, !clippedRect.isEmpty else {
             completion(.failure(ScreenCaptureError.invalidRegionRect(rect: rect)))
             return
         }
 
-        let localRect = rect
-            .offsetBy(dx: -context.displayFrame.minX, dy: -context.displayFrame.minY)
-            .standardized
         let configuration = SCStreamConfiguration()
-        configuration.width = max(1, Int((localRect.width * context.pointPixelScale).rounded()))
-        configuration.height = max(1, Int((localRect.height * context.pointPixelScale).rounded()))
+        configuration.width = max(1, Int((clippedRect.width * context.pointPixelScale).rounded()))
+        configuration.height = max(1, Int((clippedRect.height * context.pointPixelScale).rounded()))
         configuration.showsCursor = false
-        configuration.sourceRect = localRect
+        configuration.sourceRect = Self.screenCaptureKitSourceRect(
+            for: clippedRect,
+            within: context.screenFrame
+        )
+        if #available(macOS 14.0, *) {
+            configuration.captureResolution = .best
+        }
 
         let filter = makeContentFilter(using: context)
-        SCScreenshotManager.captureImage(contentFilter: filter, configuration: configuration) { image, error in
-            if let error {
+        Task {
+            do {
+                guard let image = try await Self.captureSingleFrame(
+                    filter: filter,
+                    configuration: configuration
+                ) else {
+                    completion(
+                        .failure(
+                            ScreenCaptureError.regionImageUnavailable(
+                                displayID: context.displayID,
+                                rect: rect
+                            )
+                        )
+                    )
+                    return
+                }
+
+                completion(.success(Self.copyToCPUBacked(image) ?? image))
+            } catch {
                 completion(
                     .failure(
                         ScreenCaptureError.regionCaptureFailed(
@@ -182,23 +215,25 @@ final class ScreenCaptureManager: ScreenCaptureManaging {
                         )
                     )
                 )
-                return
             }
-
-            guard let image else {
-                completion(
-                    .failure(
-                        ScreenCaptureError.regionImageUnavailable(
-                            displayID: context.displayID,
-                            rect: rect
-                        )
-                    )
-                )
-                return
-            }
-
-            completion(.success(image))
         }
+    }
+
+    static func screenCaptureKitSourceRect(
+        for globalRect: CGRect,
+        within screenFrame: CGRect
+    ) -> CGRect {
+        let clippedRect = globalRect
+            .standardized
+            .intersection(screenFrame)
+            .standardized
+
+        return CGRect(
+            x: clippedRect.minX - screenFrame.minX,
+            y: screenFrame.maxY - clippedRect.maxY,
+            width: clippedRect.width,
+            height: clippedRect.height
+        )
     }
 
     private func makeContentFilter(using context: DisplayCaptureContext) -> SCContentFilter {
@@ -211,6 +246,115 @@ final class ScreenCaptureManager: ScreenCaptureManaging {
         }
 
         return SCContentFilter(display: context.display, excludingWindows: context.excludedWindows)
+    }
+
+    private static func captureSingleFrame(
+        filter: SCContentFilter,
+        configuration: SCStreamConfiguration
+    ) async throws -> CGImage? {
+        let handler = SingleFrameHandler()
+        let stream = SCStream(filter: filter, configuration: configuration, delegate: nil)
+        try stream.addStreamOutput(
+            handler,
+            type: .screen,
+            sampleHandlerQueue: DispatchQueue(label: "dropshot.regioncapture")
+        )
+        try await stream.startCapture()
+
+        let image = await withTaskGroup(of: CGImage?.self) { group -> CGImage? in
+            group.addTask {
+                await handler.waitForFrame()
+            }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                return nil
+            }
+
+            let firstResult = await group.next() ?? nil
+            group.cancelAll()
+            return firstResult
+        }
+
+        try? await stream.stopCapture()
+        return image
+    }
+
+    private static func copyToCPUBacked(_ sourceImage: CGImage) -> CGImage? {
+        let width = sourceImage.width
+        let height = sourceImage.height
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        let bitmapInfo = CGImageAlphaInfo.premultipliedFirst.rawValue |
+            CGBitmapInfo.byteOrder32Little.rawValue
+
+        guard let context = CGContext(
+            data: nil,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: width * 4,
+            space: colorSpace,
+            bitmapInfo: bitmapInfo
+        ) else {
+            return nil
+        }
+
+        context.draw(sourceImage, in: CGRect(x: 0, y: 0, width: width, height: height))
+        return context.makeImage()
+    }
+}
+
+private final class SingleFrameHandler: NSObject, SCStreamOutput, @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<CGImage?, Never>?
+    private var capturedImage: CGImage?
+    private var didDeliverFrame = false
+
+    func waitForFrame() async -> CGImage? {
+        await withCheckedContinuation { continuation in
+            lock.lock()
+            if didDeliverFrame {
+                let image = capturedImage
+                lock.unlock()
+                continuation.resume(returning: image)
+            } else {
+                self.continuation = continuation
+                lock.unlock()
+            }
+        }
+    }
+
+    func stream(
+        _ stream: SCStream,
+        didOutputSampleBuffer sampleBuffer: CMSampleBuffer,
+        of type: SCStreamOutputType
+    ) {
+        guard type == .screen, let pixelBuffer = sampleBuffer.imageBuffer else {
+            return
+        }
+
+        let image = CIContext().createCGImage(
+            CIImage(cvPixelBuffer: pixelBuffer),
+            from: CGRect(
+                x: 0,
+                y: 0,
+                width: CVPixelBufferGetWidth(pixelBuffer),
+                height: CVPixelBufferGetHeight(pixelBuffer)
+            )
+        )
+
+        lock.lock()
+        guard !didDeliverFrame else {
+            lock.unlock()
+            return
+        }
+
+        didDeliverFrame = true
+        capturedImage = image
+        let continuation = self.continuation
+        self.continuation = nil
+        lock.unlock()
+
+        continuation?.resume(returning: image)
     }
 }
 
