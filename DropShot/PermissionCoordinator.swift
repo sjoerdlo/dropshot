@@ -1,5 +1,6 @@
 import AppKit
 import CoreGraphics
+import ScreenCaptureKit
 
 final class PermissionCoordinator {
     private static let screenRecordingSettingsURL =
@@ -19,7 +20,29 @@ final class PermissionCoordinator {
     private var shouldOfferSettingsShortcut = false
 
     var hasScreenRecordingPermission: Bool {
-        CGPreflightScreenCaptureAccess()
+        // CGPreflightScreenCaptureAccess() can return false after a rebuild even
+        // when the user has already granted Screen Recording permission in System
+        // Settings.  This happens because macOS ties TCC authorisation to the
+        // binary's code signature, which changes on every development build.
+        //
+        // As a workaround we also accept permission if ScreenCaptureKit's
+        // SCShareableContent succeeds, which is a live check that bypasses the
+        // stale TCC cache.
+        if CGPreflightScreenCaptureAccess() {
+            return true
+        }
+
+        // Synchronous probe: attempt to list shareable content.  If ScreenCaptureKit
+        // returns content rather than an error the system *does* consider us authorised.
+        var hasAccess = false
+        let semaphore = DispatchSemaphore(value: 0)
+        SCShareableContent.getWithCompletionHandler { content, error in
+            hasAccess = (content != nil && error == nil)
+            semaphore.signal()
+        }
+        // Timeout after 1 second so we never block the main thread indefinitely.
+        _ = semaphore.wait(timeout: .now() + 1)
+        return hasAccess
     }
 
     init(notificationCenter: NotificationCenter = .default) {

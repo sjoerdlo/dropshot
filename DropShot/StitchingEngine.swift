@@ -100,7 +100,6 @@ final class StitchingEngine {
     enum StitchingError: LocalizedError {
         case noStrips
         case compositeTooLarge(width: Int, height: Int, maximumPixels: Int)
-        case rasterizationFailed(width: Int, height: Int)
         case compositeImageCreationFailed(width: Int, height: Int)
 
         var errorDescription: String? {
@@ -110,8 +109,6 @@ final class StitchingEngine {
             case .compositeTooLarge(let width, let height, let maximumPixels):
                 let pixelCount = Int64(width) * Int64(height)
                 return "The stitched image would be \(width)x\(height) (\(pixelCount) pixels), exceeding the \(maximumPixels)-pixel safety limit."
-            case .rasterizationFailed(let width, let height):
-                return "The stitching engine could not rasterize a \(width)x\(height) strip."
             case .compositeImageCreationFailed(let width, let height):
                 return "The stitching engine could not create a \(width)x\(height) composite image."
             }
@@ -219,23 +216,14 @@ final class StitchingEngine {
         case disconnected(reason: RejectionReason, diagnostic: String)
     }
 
-    private struct Raster {
-        let width: Int
-        let height: Int
-        let bytesPerRow: Int
-        let bytes: [UInt8]
-    }
-
     private struct CompositeSegment {
         let image: CGImage
         let sourceStartRow: Int
         let height: Int
     }
 
-    private static let colorSpace = CGColorSpaceCreateDeviceRGB()
-    private static let bitmapInfo = CGBitmapInfo.byteOrder32Big.union(
-        CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue)
-    )
+    // Pixel format and color space are managed by NSImage / NSBitmapImageRep
+    // during compositing — no manual bitmap configuration required.
 
     let configuration: Configuration
 
@@ -786,99 +774,65 @@ final class StitchingEngine {
             throw StitchingError.noStrips
         }
 
-        let bytesPerRow = compositeWidth * 4
-        var compositeBytes = [UInt8](repeating: 0, count: compositeHeight * bytesPerRow)
-        var destinationStartRow = 0
+        // Use a pure CGContext approach with CGImage.cropping() — no NSImage
+        // involved, avoiding known coordinate-system issues with NSImage.draw
+        // in NSBitmapImageRep-backed contexts.
+        //
+        // Match the pixel format that ScreenCaptureKit / copyToCPUBacked produces
+        // (premultipliedFirst + byteOrder32Little = BGRA) so CGContext.draw() can
+        // blit without conversion.
+        let bitmapInfo = CGImageAlphaInfo.premultipliedFirst.rawValue
+            | CGBitmapInfo.byteOrder32Little.rawValue
+
+        guard let context = CGContext(
+            data: nil,
+            width: compositeWidth,
+            height: compositeHeight,
+            bitsPerComponent: 8,
+            bytesPerRow: compositeWidth * 4,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: bitmapInfo
+        ) else {
+            throw StitchingError.compositeImageCreationFailed(
+                width: compositeWidth, height: compositeHeight
+            )
+        }
+
+        context.interpolationQuality = .none
+
+        // CGContext uses bottom-left origin: y = 0 is the visual bottom.
+        // topEdge counts how many visual rows have been placed from the top.
+        var topEdge = 0
 
         for segment in compositeSegments {
-            let raster = try rasterize(segment.image)
-            copyRows(
-                from: raster,
-                sourceStartRow: segment.sourceStartRow,
-                rowCount: segment.height,
-                into: &compositeBytes,
-                destinationStartRow: destinationStartRow,
-                destinationBytesPerRow: bytesPerRow
+            // CGImage.cropping uses top-left origin pixel coordinates:
+            // (0, 0) = top-left of the image.
+            let cropRect = CGRect(
+                x: 0,
+                y: segment.sourceStartRow,
+                width: segment.image.width,
+                height: segment.height
             )
-            destinationStartRow += segment.height
-        }
-
-        return try makeImage(from: compositeBytes, width: compositeWidth, height: compositeHeight)
-    }
-
-    private func rasterize(_ image: CGImage) throws -> Raster {
-        let bytesPerRow = image.width * 4
-        var bytes = [UInt8](repeating: 0, count: image.height * bytesPerRow)
-        let wasRasterized = bytes.withUnsafeMutableBytes { rawBuffer in
-            guard let context = CGContext(
-                data: rawBuffer.baseAddress,
-                width: image.width,
-                height: image.height,
-                bitsPerComponent: 8,
-                bytesPerRow: bytesPerRow,
-                space: Self.colorSpace,
-                bitmapInfo: Self.bitmapInfo.rawValue
-            ) else {
-                return false
+            guard let croppedStrip = segment.image.cropping(to: cropRect) else {
+                continue
             }
 
-            context.interpolationQuality = .none
-            // Core Graphics bitmap contexts use a bottom-left origin by default.
-            // Flip into a top-left coordinate space so copied rows preserve the
-            // same visual orientation as the original capture strips.
-            context.translateBy(x: 0, y: CGFloat(image.height))
-            context.scaleBy(x: 1, y: -1)
-            context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
-            return true
+            // Place the cropped strip in the composite.
+            // In CG bottom-left coords the visual top of the composite is at
+            // y = compositeHeight.  This band sits at:
+            let dstY = compositeHeight - topEdge - segment.height
+            context.draw(
+                croppedStrip,
+                in: CGRect(x: 0, y: dstY, width: croppedStrip.width, height: croppedStrip.height)
+            )
+
+            topEdge += segment.height
         }
 
-        guard wasRasterized else {
-            throw StitchingError.rasterizationFailed(width: image.width, height: image.height)
-        }
-
-        return Raster(width: image.width, height: image.height, bytesPerRow: bytesPerRow, bytes: bytes)
-    }
-
-    private func copyRows(
-        from raster: Raster,
-        sourceStartRow: Int,
-        rowCount: Int,
-        into destinationBytes: inout [UInt8],
-        destinationStartRow: Int,
-        destinationBytesPerRow: Int
-    ) {
-        let rowLength = raster.width * 4
-
-        for rowOffset in 0..<rowCount {
-            let sourceOffset = (sourceStartRow + rowOffset) * raster.bytesPerRow
-            let destinationOffset = (destinationStartRow + rowOffset) * destinationBytesPerRow
-            destinationBytes[destinationOffset..<(destinationOffset + rowLength)] =
-                raster.bytes[sourceOffset..<(sourceOffset + rowLength)]
-        }
-    }
-
-    private func makeImage(from bytes: [UInt8], width: Int, height: Int) throws -> CGImage {
-        let cfData = bytes.withUnsafeBytes { rawBuffer in
-            CFDataCreate(nil, rawBuffer.bindMemory(to: UInt8.self).baseAddress, bytes.count)
-        }
-        guard let cfData, let provider = CGDataProvider(data: cfData) else {
-            throw StitchingError.compositeImageCreationFailed(width: width, height: height)
-        }
-
-        guard let image = CGImage(
-            width: width,
-            height: height,
-            bitsPerComponent: 8,
-            bitsPerPixel: 32,
-            bytesPerRow: width * 4,
-            space: Self.colorSpace,
-            bitmapInfo: Self.bitmapInfo,
-            provider: provider,
-            decode: nil,
-            shouldInterpolate: false,
-            intent: .defaultIntent
-        ) else {
-            throw StitchingError.compositeImageCreationFailed(width: width, height: height)
+        guard let image = context.makeImage() else {
+            throw StitchingError.compositeImageCreationFailed(
+                width: compositeWidth, height: compositeHeight
+            )
         }
 
         return image
@@ -905,8 +859,12 @@ final class StitchingEngine {
         currentImage: CGImage
     ) -> Result<Translation, Error> {
         do {
-            let request = VNTranslationalImageRegistrationRequest(targetedCGImage: currentImage, options: [:])
-            let handler = VNImageRequestHandler(cgImage: referenceImage, options: [:])
+            // Match MacShot's convention: targeted = reference, handler = current.
+            // With this ordering, Vision returns positive ty when the content has
+            // scrolled downward (i.e. the current frame shows content further down
+            // the page), which naturally maps to our "append" direction.
+            let request = VNTranslationalImageRegistrationRequest(targetedCGImage: referenceImage, options: [:])
+            let handler = VNImageRequestHandler(cgImage: currentImage, options: [:])
             try handler.perform([request])
 
             guard let observation = request.results?.first else {

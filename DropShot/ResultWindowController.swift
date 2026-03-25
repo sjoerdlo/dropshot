@@ -56,7 +56,13 @@ final class ResultWindowController: NSWindowController, NSWindowDelegate {
             return
         }
 
-        scrollView.contentView.scroll(to: .zero)
+        // In the non-flipped document view (0,0) = bottom-left.
+        // Scroll to the top of the content so the user sees the
+        // beginning of the stitched image first.
+        let docHeight = imageDocumentView.frame.height
+        let clipHeight = scrollView.contentView.bounds.height
+        let topOrigin = NSPoint(x: 0, y: max(0, docHeight - clipHeight))
+        scrollView.contentView.scroll(to: topOrigin)
         scrollView.reflectScrolledClipView(scrollView.contentView)
         showWindow(nil)
         window.makeKeyAndOrderFront(nil)
@@ -210,8 +216,12 @@ private final class ResultImageDocumentView: NSView {
         }
     }
 
+    // Use the standard bottom-left coordinate system (isFlipped = false).
+    // A flipped view combined with CGContext.makeImage()-backed NSImages can
+    // cause a double-flip that renders content upside-down.  The non-flipped
+    // coordinate system avoids this ambiguity entirely.
     override var isFlipped: Bool {
-        true
+        false
     }
 
     override func draw(_ dirtyRect: NSRect) {

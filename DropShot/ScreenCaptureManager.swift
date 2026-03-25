@@ -332,6 +332,15 @@ private final class SingleFrameHandler: NSObject, SCStreamOutput, @unchecked Sen
             return
         }
 
+        // Only accept frames with a .complete status.  ScreenCaptureKit may
+        // deliver idle, blank, or suspended frames that contain no useful
+        // pixel data.  Silently skip those so the next complete frame is used.
+        if let attachments = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, createIfNecessary: false) as? [[SCStreamFrameInfo: Any]],
+           let statusValue = attachments.first?[.status] as? Int,
+           SCFrameStatus(rawValue: statusValue) != .complete {
+            return
+        }
+
         let image = CIContext().createCGImage(
             CIImage(cvPixelBuffer: pixelBuffer),
             from: CGRect(
