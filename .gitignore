@@ -9,3 +9,6 @@ units/
 bin/runtime
 runtime_kernel/
 DropShot.xcodeproj/project.xcworkspace/xcuserdata/
+AGENTS.md
+DECISIONS.md
+VISION.md
