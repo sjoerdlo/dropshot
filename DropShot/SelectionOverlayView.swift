@@ -34,6 +34,7 @@ final class SelectionOverlayView: NSView {
     private var displayMode: DisplayMode = .selection {
         didSet {
             needsDisplay = true
+            window?.invalidateCursorRects(for: self)
         }
     }
 
@@ -41,8 +42,19 @@ final class SelectionOverlayView: NSView {
     private let cornerGuideLength: CGFloat = 14
     private let cornerGuideInset: CGFloat = 1
 
+    private let sizeFont = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .medium)
+    private let sizeLabelPadding = CGSize(width: 8, height: 4)
+    private let sizeLabelOffset: CGFloat = 12
+    private let sizeLabelCornerRadius: CGFloat = 5
+
     override var acceptsFirstResponder: Bool {
         true
+    }
+
+    override func resetCursorRects() {
+        if displayMode == .selection {
+            addCursorRect(bounds, cursor: .crosshair)
+        }
     }
 
     override var isOpaque: Bool {
@@ -133,6 +145,63 @@ final class SelectionOverlayView: NSView {
         }
 
         drawSelectionBorder(around: selectionRect)
+
+        if case .selecting = state, displayMode == .selection {
+            drawSizeLabel(for: selectionRect)
+        }
+    }
+
+    private func drawSizeLabel(for selectionRect: CGRect) {
+        let scaleFactor = window?.backingScaleFactor ?? 2
+        let pixelWidth = Int(selectionRect.width * scaleFactor)
+        let pixelHeight = Int(selectionRect.height * scaleFactor)
+        guard pixelWidth > 0, pixelHeight > 0 else {
+            return
+        }
+
+        let widthString = "\(pixelWidth)"
+        let heightString = "\(pixelHeight)"
+        let multiplicationSign = "\u{00D7}"  // ×
+
+        let labelText = "\(widthString) \(multiplicationSign) \(heightString)"
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: sizeFont,
+            .foregroundColor: NSColor.white
+        ]
+        let textSize = (labelText as NSString).size(withAttributes: attributes)
+
+        let labelSize = CGSize(
+            width: textSize.width + sizeLabelPadding.width * 2,
+            height: textSize.height + sizeLabelPadding.height * 2
+        )
+
+        // Position the label centered below the selection rect, with a small gap.
+        var labelOrigin = CGPoint(
+            x: selectionRect.midX - labelSize.width / 2,
+            y: selectionRect.minY - sizeLabelOffset - labelSize.height
+        )
+
+        // If the label would go below the view, place it above the selection instead.
+        if labelOrigin.y < bounds.minY {
+            labelOrigin.y = selectionRect.maxY + sizeLabelOffset
+        }
+
+        // Clamp horizontally to stay within the view.
+        labelOrigin.x = max(bounds.minX + 2, min(labelOrigin.x, bounds.maxX - labelSize.width - 2))
+
+        let labelRect = CGRect(origin: labelOrigin, size: labelSize)
+
+        // Draw dark rounded background.
+        let backgroundPath = NSBezierPath(roundedRect: labelRect, xRadius: sizeLabelCornerRadius, yRadius: sizeLabelCornerRadius)
+        NSColor.black.withAlphaComponent(0.72).setFill()
+        backgroundPath.fill()
+
+        // Draw text centered in the label.
+        let textOrigin = CGPoint(
+            x: labelRect.minX + sizeLabelPadding.width,
+            y: labelRect.minY + sizeLabelPadding.height
+        )
+        (labelText as NSString).draw(at: textOrigin, withAttributes: attributes)
     }
 
     private func clampedPoint(for event: NSEvent) -> CGPoint {

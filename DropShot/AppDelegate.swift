@@ -8,9 +8,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private lazy var captureSessionCoordinator = CaptureSessionCoordinator(
         permissionCoordinator: permissionCoordinator
     )
-    private lazy var hotkeyManager = HotkeyManager { [weak self] in
-        self?.startCaptureSession()
-    }
+    private lazy var hotkeyManager = HotkeyManager(handlers: [
+        HotkeyManager.Hotkey(
+            keyCode: UInt32(kVK_ANSI_3),
+            modifiers: UInt32(cmdKey | shiftKey),
+            id: 1
+        ): { [weak self] in
+            self?.captureSessionCoordinator.beginCaptureSession()
+        },
+        HotkeyManager.Hotkey(
+            keyCode: UInt32(kVK_ANSI_4),
+            modifiers: UInt32(cmdKey | shiftKey),
+            id: 2
+        ): { [weak self] in
+            self?.captureSessionCoordinator.beginQuickCapture()
+        }
+    ])
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         configureStatusItem()
@@ -32,13 +45,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func configureMenu() {
         statusMenu.removeAllItems()
 
-        let captureItem = NSMenuItem(
-            title: "Capture",
-            action: #selector(handleCaptureAction(_:)),
+        let scrollCaptureItem = NSMenuItem(
+            title: "Scroll Capture (⌘⇧3)",
+            action: #selector(handleScrollCaptureAction(_:)),
             keyEquivalent: ""
         )
-        captureItem.target = self
-        statusMenu.addItem(captureItem)
+        scrollCaptureItem.target = self
+        statusMenu.addItem(scrollCaptureItem)
+
+        let quickCaptureItem = NSMenuItem(
+            title: "Quick Capture (⌘⇧4)",
+            action: #selector(handleQuickCaptureAction(_:)),
+            keyEquivalent: ""
+        )
+        quickCaptureItem.target = self
+        statusMenu.addItem(quickCaptureItem)
+
         statusMenu.addItem(.separator())
 
         let quitItem = NSMenuItem(
@@ -51,12 +73,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc
-    private func handleCaptureAction(_ sender: Any?) {
-        startCaptureSession()
+    private func handleScrollCaptureAction(_ sender: Any?) {
+        captureSessionCoordinator.beginCaptureSession()
     }
 
-    private func startCaptureSession() {
-        captureSessionCoordinator.beginCaptureSession()
+    @objc
+    private func handleQuickCaptureAction(_ sender: Any?) {
+        captureSessionCoordinator.beginQuickCapture()
     }
 
     @objc
@@ -66,16 +89,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 }
 
 final class HotkeyManager {
-    private var hotKeyRef: EventHotKeyRef?
-    private var eventHandlerRef: EventHandlerRef?
-    private let onCaptureRequested: () -> Void
+    struct Hotkey: Hashable {
+        let keyCode: UInt32
+        let modifiers: UInt32
+        let id: UInt32
+    }
 
-    init(onCaptureRequested: @escaping () -> Void) {
-        self.onCaptureRequested = onCaptureRequested
+    private var hotKeyRefs: [UInt32: EventHotKeyRef] = [:]
+    private var eventHandlerRef: EventHandlerRef?
+    private let handlers: [Hotkey: () -> Void]
+
+    init(handlers: [Hotkey: () -> Void]) {
+        self.handlers = handlers
     }
 
     func register() {
-        guard hotKeyRef == nil, eventHandlerRef == nil else {
+        guard eventHandlerRef == nil else {
             return
         }
 
@@ -97,32 +126,31 @@ final class HotkeyManager {
             return
         }
 
-        let hotKeyID = EventHotKeyID(signature: Self.hotKeySignature, id: Self.hotKeyIdentifier)
-        let registrationStatus = RegisterEventHotKey(
-            UInt32(kVK_ANSI_X),
-            UInt32(cmdKey | shiftKey),
-            hotKeyID,
-            GetApplicationEventTarget(),
-            0,
-            &hotKeyRef
-        )
+        for hotkey in handlers.keys {
+            let hotKeyID = EventHotKeyID(signature: Self.hotKeySignature, id: hotkey.id)
+            var ref: EventHotKeyRef?
+            let status = RegisterEventHotKey(
+                hotkey.keyCode,
+                hotkey.modifiers,
+                hotKeyID,
+                GetApplicationEventTarget(),
+                0,
+                &ref
+            )
 
-        guard registrationStatus == noErr else {
-            if let eventHandlerRef {
-                RemoveEventHandler(eventHandlerRef)
-                self.eventHandlerRef = nil
+            if status == noErr, let ref {
+                hotKeyRefs[hotkey.id] = ref
+            } else {
+                NSLog("Failed to register hotkey %d: %d", hotkey.id, status)
             }
-
-            NSLog("Failed to register capture hotkey: %d", registrationStatus)
-            return
         }
     }
 
     func unregister() {
-        if let hotKeyRef {
-            UnregisterEventHotKey(hotKeyRef)
-            self.hotKeyRef = nil
+        for (_, ref) in hotKeyRefs {
+            UnregisterEventHotKey(ref)
         }
+        hotKeyRefs.removeAll()
 
         if let eventHandlerRef {
             RemoveEventHandler(eventHandlerRef)
@@ -154,17 +182,20 @@ final class HotkeyManager {
             return status
         }
 
-        guard hotKeyID.signature == Self.hotKeySignature, hotKeyID.id == Self.hotKeyIdentifier else {
+        guard hotKeyID.signature == Self.hotKeySignature else {
             return noErr
         }
 
-        let onCaptureRequested = self.onCaptureRequested
-        DispatchQueue.main.async(execute: onCaptureRequested)
+        // Find the handler for this hotkey ID
+        if let hotkey = handlers.keys.first(where: { $0.id == hotKeyID.id }),
+           let handler = handlers[hotkey] {
+            DispatchQueue.main.async(execute: handler)
+        }
+
         return noErr
     }
 
     private static let hotKeySignature = fourCharacterCode("DSHT")
-    private static let hotKeyIdentifier: UInt32 = 1
     private static let hotKeyEventHandler: EventHandlerUPP = { _, event, userData in
         guard let userData else {
             return noErr

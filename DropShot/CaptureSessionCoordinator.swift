@@ -117,7 +117,9 @@ final class CaptureSessionCoordinator {
     private let resultWindowFactory: (CGImage, CGSize, NSScreen?, String) -> ResultWindowPresenting
     private var nextCaptureRequestID: UInt64 = 0
     private var sessionState: SessionState = .idle
+    private var isQuickCaptureMode = false
     private var resultWindowController: ResultWindowPresenting?
+    private var dragThumbnailController: DragThumbnailWindowController?
 
     var onStillImageReady: ((StillImage) -> Void)?
     var onSelectedRegion: ((SelectedRegion) -> Void)?
@@ -168,6 +170,16 @@ final class CaptureSessionCoordinator {
     }
 
     func beginCaptureSession() {
+        isQuickCaptureMode = false
+        beginCaptureFlow()
+    }
+
+    func beginQuickCapture() {
+        isQuickCaptureMode = true
+        beginCaptureFlow()
+    }
+
+    private func beginCaptureFlow() {
         let request = makeNextCaptureRequest()
         let existingPresentationSession = currentPresentationSession
 
@@ -178,6 +190,8 @@ final class CaptureSessionCoordinator {
         sessionState = .capturing(request)
         resultWindowController?.close()
         resultWindowController = nil
+        dragThumbnailController?.dismiss()
+        dragThumbnailController = nil
         existingPresentationSession?.scrollCaptureController.cancelSession(completion: nil)
         existingPresentationSession?.dismissWindows()
 
@@ -358,6 +372,16 @@ final class CaptureSessionCoordinator {
         )
         presentationSession.selectedRegion = selectedRegion
         self.selectedRegion = selectedRegion
+
+        if isQuickCaptureMode {
+            handleQuickCaptureSelection(
+                selectedRect: selectedRect,
+                selectedRegion: selectedRegion,
+                for: presentationSession
+            )
+            return
+        }
+
         presentationSession.overlayWindowController.enterPassthroughMode()
         presentationSession.scrollCaptureController.startSession(for: selectedRegion) {
             [weak self, weak presentationSession] result in
@@ -372,6 +396,109 @@ final class CaptureSessionCoordinator {
                 for: presentationSession
             )
         }
+    }
+
+    private func handleQuickCaptureSelection(
+        selectedRect: CGRect,
+        selectedRegion: SelectedRegion,
+        for presentationSession: PresentationSession
+    ) {
+        let stillImage = presentationSession.stillImage
+        let scale = stillImage.pointPixelScale
+
+        // Convert screen rect to pixel coordinates relative to the still image.
+        // The screen rect is in macOS screen coordinates (origin bottom-left);
+        // CGImage.cropping uses top-left origin.
+        let screenFrame = stillImage.screen.frame
+        let pixelX = (selectedRect.minX - screenFrame.minX) * scale
+        let pixelY = (screenFrame.maxY - selectedRect.maxY) * scale
+        let pixelWidth = selectedRect.width * scale
+        let pixelHeight = selectedRect.height * scale
+
+        let cropRect = CGRect(x: pixelX, y: pixelY, width: pixelWidth, height: pixelHeight)
+            .integral
+            .intersection(CGRect(x: 0, y: 0, width: stillImage.image.width, height: stillImage.image.height))
+
+        guard !cropRect.isEmpty,
+              let croppedImage = stillImage.image.cropping(to: cropRect) else {
+            cancelPresentationSession(presentationSession)
+            return
+        }
+
+        // Dismiss overlay and show the thumbnail
+        sessionState = .idle
+        presentationSession.dismissWindows()
+
+        showQuickCaptureThumbnail(
+            image: croppedImage,
+            screen: stillImage.screen,
+            selectedRegion: selectedRegion
+        )
+    }
+
+    private func showQuickCaptureThumbnail(
+        image: CGImage,
+        screen: NSScreen,
+        selectedRegion: SelectedRegion
+    ) {
+        dragThumbnailController?.dismiss()
+
+        let defaultFileName = ResultWindowController.defaultFileName(for: Date())
+        let thumbnail = DragThumbnailWindowController(
+            image: image,
+            preferredScreen: screen,
+            defaultFileName: defaultFileName
+        )
+
+        thumbnail.onClicked = { [weak self, weak thumbnail] in
+            thumbnail?.dismiss()
+            self?.openQuickCaptureResultWindow(
+                image: image,
+                selectedRegion: selectedRegion
+            )
+        }
+        thumbnail.onClose = { [weak self, weak thumbnail] in
+            if self?.dragThumbnailController === thumbnail {
+                self?.dragThumbnailController = nil
+            }
+        }
+
+        dragThumbnailController = thumbnail
+        thumbnail.present()
+
+        // Copy to pasteboard for immediate ⌘V pasting
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        let pointSize = selectedRegion.stillImage.pointSize(
+            for: CGSize(width: image.width, height: image.height)
+        )
+        pasteboard.writeObjects([NSImage(cgImage: image, size: pointSize)])
+    }
+
+    private func openQuickCaptureResultWindow(
+        image: CGImage,
+        selectedRegion: SelectedRegion
+    ) {
+        resultWindowController?.close()
+
+        let pointSize = selectedRegion.stillImage.pointSize(
+            for: CGSize(width: image.width, height: image.height)
+        )
+
+        let windowController = resultWindowFactory(
+            image,
+            pointSize,
+            selectedRegion.stillImage.screen,
+            ResultWindowController.defaultFileName(for: Date())
+        )
+        windowController.onClose = { [weak self, weak windowController] in
+            if self?.resultWindowController === windowController {
+                self?.resultWindowController = nil
+            }
+        }
+
+        resultWindowController = windowController
+        windowController.present()
     }
 
     private func handleOverlayClose(for presentationSession: PresentationSession) {
@@ -558,6 +685,44 @@ final class CaptureSessionCoordinator {
     }
 
     private func presentResultWindow(
+        for completedSession: ScrollCaptureController.CompletedSession,
+        selectedRegion: SelectedRegion
+    ) {
+        dragThumbnailController?.dismiss()
+
+        let defaultFileName = ResultWindowController.defaultFileName(for: completedSession.endedAt)
+        let thumbnail = DragThumbnailWindowController(
+            image: completedSession.composite.image,
+            preferredScreen: selectedRegion.stillImage.screen,
+            defaultFileName: defaultFileName
+        )
+
+        thumbnail.onClicked = { [weak self, weak thumbnail] in
+            thumbnail?.dismiss()
+            self?.openFullResultWindow(for: completedSession, selectedRegion: selectedRegion)
+        }
+        thumbnail.onClose = { [weak self, weak thumbnail] in
+            if self?.dragThumbnailController === thumbnail {
+                self?.dragThumbnailController = nil
+            }
+        }
+
+        dragThumbnailController = thumbnail
+        thumbnail.present()
+
+        // Also copy the image to the pasteboard for easy pasting
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        let nsImage = NSImage(
+            cgImage: completedSession.composite.image,
+            size: selectedRegion.stillImage.pointSize(
+                for: completedSession.composite.metadata.compositePixelSize
+            )
+        )
+        pasteboard.writeObjects([nsImage])
+    }
+
+    private func openFullResultWindow(
         for completedSession: ScrollCaptureController.CompletedSession,
         selectedRegion: SelectedRegion
     ) {
