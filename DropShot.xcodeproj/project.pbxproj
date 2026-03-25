@@ -21,6 +21,7 @@
 		2C45B4E12C3A10010000000B /* ResultWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C45B4E12C3A20010000000B /* ResultWindowController.swift */; };
 		2C45B4E12C3A10010000000C /* CaptureSessionCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C45B4E12C3A20010000000C /* CaptureSessionCoordinatorTests.swift */; };
 		2C45B4E12C3A10010000000D /* DragThumbnailWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C45B4E12C3A20010000000D /* DragThumbnailWindowController.swift */; };
+		A1B2C3D4E5F60001 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60002 /* Assets.xcassets */; };
 		B10814BFF6EE5AB7075F37FE /* DropShotTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DB8BC0D84EAC7D6D13C908E5 /* DropShotTests.swift */; };
 		F885A998A42122E6FF1CAD1C /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A719B51C8C9B0C392F71075 /* main.swift */; };
 /* End PBXBuildFile section */
@@ -37,6 +38,7 @@
 
 /* Begin PBXFileReference section */
 		255CD4E906BB76AB26BDD108 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F60002 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		2C45B4E12C3A200100000001 /* CaptureSessionCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureSessionCoordinator.swift; sourceTree = "<group>"; };
 		2C45B4E12C3A200100000002 /* PermissionCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PermissionCoordinator.swift; sourceTree = "<group>"; };
 		2C45B4E12C3A200100000003 /* PermissionWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PermissionWindowController.swift; sourceTree = "<group>"; };
@@ -69,6 +71,7 @@
 		0A5E2D7EE65635FB4C74D001 /* DropShot */ = {
 			isa = PBXGroup;
 			children = (
+				A1B2C3D4E5F60002 /* Assets.xcassets */,
 				255CD4E906BB76AB26BDD108 /* AppDelegate.swift */,
 				2C45B4E12C3A200100000001 /* CaptureSessionCoordinator.swift */,
 				2C45B4E12C3A200100000004 /* CaptureOverlayWindowController.swift */,
@@ -113,6 +116,7 @@
 			buildConfigurationList = 02789A50E922A7F498FDB2F7 /* Build configuration list for PBXNativeTarget "DropShot" */;
 			buildPhases = (
 				9A4C05324C7B0CF42CD34F9E /* Sources */,
+				A1B2C3D4E5F60003 /* Resources */,
 			);
 			buildRules = (
 			);
@@ -171,6 +175,17 @@
 			);
 		};
 /* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		A1B2C3D4E5F60003 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A1B2C3D4E5F60001 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		43B1BF8FBE11BBDC9C10D7E6 /* Sources */ = {
@@ -236,14 +251,16 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = DropShot/DropShot.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = DKUBJGA7PA;
+				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = DropShot/Info.plist;
-				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -384,14 +401,16 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = DropShot/DropShot.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
 				DEAD_CODE_STRIPPING = YES;
 				DEVELOPMENT_TEAM = DKUBJGA7PA;
+				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = DropShot/Info.plist;
-				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
