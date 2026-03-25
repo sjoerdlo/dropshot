@@ -3,3 +3,9 @@
 .runtime/
 __pycache__/
 *.pyc
+PROJECT_START.md
+ROADMAP.md
+units/
+bin/runtime
+runtime_kernel/
+DropShot.xcodeproj/project.xcworkspace/xcuserdata/
